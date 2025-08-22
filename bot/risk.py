@@ -1,4 +1,4 @@
-from .config import ACCOUNT_EQUITY_USDT, RISK_PER_TRADE, ABS_RISK_USDT,                     LEVERAGE, MAX_NOTIONAL_FRACTION, MARGIN_BUFFER_FRAC
+from .config import ACCOUNT_EQUITY_USDT, RISK_PER_TRADE, ABS_RISK_USDT,                     LEVERAGE, MAX_NOTIONAL_FRACTION, MARGIN_BUFFER_FRAC, MAX_SL_PCT
 
 def equity_from_balance(ex):
     try:
@@ -31,11 +31,19 @@ def size_position(entry, stop, equity_usdt):
 
 def protective_prices(side, entry, atr, ATR_MULT_SL, TP_R_MULT):
     if side == "buy":
-        stop = entry - ATR_MULT_SL * atr
-        r = entry - stop
+        raw_stop = entry - ATR_MULT_SL * atr
+        if MAX_SL_PCT and MAX_SL_PCT > 0:
+            max_dist = entry * MAX_SL_PCT
+            raw_stop = max(raw_stop, entry - max_dist)
+        stop = raw_stop
+        r = max(entry - stop, 0.0)
         tp = entry + TP_R_MULT * r
     else:
-        stop = entry + ATR_MULT_SL * atr
-        r = stop - entry
+        raw_stop = entry + ATR_MULT_SL * atr
+        if MAX_SL_PCT and MAX_SL_PCT > 0:
+            max_dist = entry * MAX_SL_PCT
+            raw_stop = min(raw_stop, entry + max_dist)
+        stop = raw_stop
+        r = max(stop - entry, 0.0)
         tp = entry - TP_R_MULT * r
     return stop, tp, r

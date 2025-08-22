@@ -124,10 +124,14 @@ def main():
                     prev = ltf.iloc[-2]
                     if not valid_row(prev):
                         continue
-                    side = "buy" if pos["side"]=="long" else "sell"
-                    # Trail / BE
-                    maybe_update_trailing(ex, sym, side, pos["size"], prev["close"], prev["atr"], last["close"],
-                                          ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
+                    # Support hedge mode: pos can be dict or list of dicts
+                    pos_list = pos if isinstance(pos, list) else [pos]
+                    for p in pos_list:
+                        side = "buy" if p["side"]=="long" else "sell"
+                        # Trail / BE
+                        entry_for_trailing = p.get("entry") or prev["close"]
+                        maybe_update_trailing(ex, sym, side, p["size"], entry_for_trailing, prev["atr"], last["close"],
+                                              ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
                     # Flip exit on EMA cross
                     tr = "up" if prev["ema_fast"] > prev["ema_slow"] else "down"
                     if pos["side"] == "long" and tr == "down":

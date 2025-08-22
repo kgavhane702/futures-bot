@@ -12,7 +12,38 @@ def get_open_positions(ex):
             sz = float(amt or 0)
             side = "long" if sz > 0 else "short" if sz < 0 else None
             if side:
-                open_map[sym] = {"side": side, "size": abs(sz)}
+                # Try to capture the average/entry price from common ccxt fields
+                ep = (
+                    p.get("entryPrice")
+                    or p.get("avgPrice")
+                    or (p.get("info", {}) or {}).get("entryPrice")
+                    or (p.get("info", {}) or {}).get("avgPrice")
+                )
+                try:
+                    entry_price = float(ep) if ep is not None else None
+                except Exception:
+                    entry_price = None
+                pos_dict = {"side": side, "size": abs(sz), "entry": entry_price}
+                # If hedge mode, we may have both long and short for same symbol; keep both
+                if sym in open_map:
+                    existing = open_map[sym]
+                    if isinstance(existing, list):
+                        # Replace same-side if exists, otherwise append
+                        replaced = False
+                        for i, ex_pos in enumerate(existing):
+                            if ex_pos.get("side") == side:
+                                existing[i] = pos_dict
+                                replaced = True
+                                break
+                        if not replaced:
+                            existing.append(pos_dict)
+                    else:
+                        if existing.get("side") != side and HEDGE_MODE:
+                            open_map[sym] = [existing, pos_dict]
+                        else:
+                            open_map[sym] = pos_dict
+                else:
+                    open_map[sym] = pos_dict
         return open_map
     except Exception as e:
         log("fetch_positions failed:", str(e))
@@ -35,11 +66,81 @@ def cancel_reduce_only_orders(ex, symbol):
     except Exception:
         pass
 
+def _is_take_profit(o) -> bool:
+    try:
+        t = (o.get("type") or "").upper()
+        it = (o.get("info", {}) or {}).get("type", "").upper()
+        return ("TAKE_PROFIT" in t) or ("TAKE_PROFIT" in it)
+    except Exception:
+        return False
+
+def _is_stop_loss(o) -> bool:
+    try:
+        if not o.get("reduceOnly"):
+            return False
+        if _is_take_profit(o):
+            return False
+        t = (o.get("type") or "").upper()
+        it = (o.get("info", {}) or {}).get("type", "").upper()
+        return ("STOP" in t) or ("STOP" in it)
+    except Exception:
+        return False
+
+def _extract_stop_price(o):
+    sp = o.get("stopPrice")
+    if sp is None:
+        sp = (o.get("info", {}) or {}).get("stopPrice")
+    if sp is None:
+        sp = (o.get("info", {}) or {}).get("triggerPrice")
+    try:
+        return float(sp) if sp is not None else None
+    except Exception:
+        return None
+
+def cancel_stop_loss_orders(ex, symbol, *, position_side: str | None = None):
+    try:
+        for o in get_open_orders(ex, symbol):
+            if _is_stop_loss(o):
+                if position_side:
+                    ps = ((o.get("params", {}) or {}).get("positionSide")
+                          or (o.get("info", {}) or {}).get("positionSide"))
+                    if ps and ps.upper() != position_side.upper():
+                        continue
+                try:
+                    ex.cancel_order(o["id"], symbol)
+                    log(f"Canceled SL order {o.get('id')} on {symbol}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+def get_current_stop_loss_price(ex, symbol, *, position_side: str | None = None):
+    try:
+        sl_prices = []
+        for o in get_open_orders(ex, symbol):
+            if _is_stop_loss(o):
+                if position_side:
+                    ps = ((o.get("params", {}) or {}).get("positionSide")
+                          or (o.get("info", {}) or {}).get("positionSide"))
+                    if ps and ps.upper() != position_side.upper():
+                        continue
+                sp = _extract_stop_price(o)
+                if sp is not None:
+                    sl_prices.append(sp)
+        if not sl_prices:
+            return None
+        return min(sl_prices), max(sl_prices)
+    except Exception:
+        return None
+
 def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
     try:
         open_orders = get_open_orders(ex, symbol)
         reduce_only = [o for o in open_orders if o.get("reduceOnly")]
-        pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
+        if isinstance(pos, list):
+            pos_size = sum(float(p.get("size", 0.0) or 0.0) for p in pos)
+        else:
+            pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
         if pos_size <= 0 and reduce_only:
             for o in reduce_only:
                 try:
@@ -121,25 +222,51 @@ def maybe_update_trailing(ex, symbol, side, qty, entry, atr, last_price,
     if DRY_RUN:
         return
     try:
+        r = ATR_MULT_SL * atr
+        position_side = "LONG" if side == "buy" else "SHORT" if HEDGE_MODE else None
+        current_sl_range = get_current_stop_loss_price(ex, symbol, position_side=position_side)
+        current_sl_min = None
+        current_sl_max = None
+        if isinstance(current_sl_range, tuple):
+            current_sl_min, current_sl_max = current_sl_range
+
         if side == "buy":
-            r = ATR_MULT_SL * atr
             be_trigger = entry + BREAKEVEN_AFTER_R * r
             trail_trigger = entry + TRAIL_AFTER_R * r
-            if last_price >= be_trigger:
-                new_sl = entry if last_price < trail_trigger else (last_price - TRAIL_ATR_MULT * atr)
-                cancel_reduce_only_orders(ex, symbol)
-                ex.create_order(symbol, "STOP_MARKET", "sell", qty,
-                                params={"reduceOnly": True, "stopPrice": float(new_sl)})
+            if last_price < be_trigger:
+                return
+            candidate = entry if last_price < trail_trigger else (last_price - TRAIL_ATR_MULT * atr)
+            new_sl = candidate
+            if current_sl_max is not None:
+                new_sl = max(current_sl_max, candidate)
+            new_sl = max(new_sl, entry)
+            new_sl = round_price(ex, symbol, new_sl)
+            if (current_sl_max is None) or (new_sl > current_sl_max + 1e-8):
+                # Place new SL first to avoid gap, then cancel older ones
+                params = {"reduceOnly": True, "newClientOrderId": new_client_id("trail")}
+                if HEDGE_MODE:
+                    params["positionSide"] = "LONG"
+                ex.create_order(symbol, "STOP_MARKET", "sell", qty, params={**params, "stopPrice": float(new_sl)})
+                cancel_stop_loss_orders(ex, symbol, position_side=position_side)
                 log("Trailing/BE SL updated", symbol, new_sl)
         else:
-            r = ATR_MULT_SL * atr
             be_trigger = entry - BREAKEVEN_AFTER_R * r
             trail_trigger = entry - TRAIL_AFTER_R * r
-            if last_price <= be_trigger:
-                new_sl = entry if last_price > trail_trigger else (last_price + TRAIL_ATR_MULT * atr)
-                cancel_reduce_only_orders(ex, symbol)
-                ex.create_order(symbol, "STOP_MARKET", "buy", qty,
-                                params={"reduceOnly": True, "stopPrice": float(new_sl)})
+            if last_price > be_trigger:
+                return
+            candidate = entry if last_price > trail_trigger else (last_price + TRAIL_ATR_MULT * atr)
+            new_sl = candidate
+            if current_sl_min is not None:
+                new_sl = min(current_sl_min, candidate)
+            new_sl = min(new_sl, entry)
+            new_sl = round_price(ex, symbol, new_sl)
+            if (current_sl_min is None) or (new_sl < current_sl_min - 1e-8):
+                # Place new SL first to avoid gap, then cancel older ones
+                params = {"reduceOnly": True, "newClientOrderId": new_client_id("trail")}
+                if HEDGE_MODE:
+                    params["positionSide"] = "SHORT"
+                ex.create_order(symbol, "STOP_MARKET", "buy", qty, params={**params, "stopPrice": float(new_sl)})
+                cancel_stop_loss_orders(ex, symbol, position_side=position_side)
                 log("Trailing/BE SL updated", symbol, new_sl)
     except Exception as e:
         log("Failed trailing/BE update", symbol, str(e))

@@ -43,6 +43,7 @@ TP_R_MULT         = float(os.getenv("TP_R_MULT", "2.0"))
 BREAKEVEN_AFTER_R = float(os.getenv("BREAKEVEN_AFTER_R", "1.0"))
 TRAIL_AFTER_R     = float(os.getenv("TRAIL_AFTER_R", "1.5"))
 TRAIL_ATR_MULT    = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
+MAX_SL_PCT        = float(os.getenv("MAX_SL_PCT", "0"))  # 0 disables; e.g., 0.02 means max 2% distance
 
 # Ops
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
