@@ -1,7 +1,5 @@
-.venv/
+.env
+venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.log
 trades_futures.csv
