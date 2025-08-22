@@ -194,7 +194,7 @@ def ensure_protection_orders(ex, symbol, side, qty, entry, atr,
     except Exception as e:
         log("ensure_protection_orders failed", symbol, str(e))
 
-def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
+def reconcile_orphan_reduce_only_orders(ex, symbol, pos, grace_cutoff_ms: float | None = None):
     try:
         open_orders = get_open_orders(ex, symbol)
         reduce_only = [o for o in open_orders if o.get("reduceOnly")]
@@ -202,12 +202,16 @@ def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
             pos_size = sum(float(p.get("size", 0.0) or 0.0) for p in pos)
         else:
             pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
-        # If no position at all, cancel ALL open orders (reduceOnly and non-reduceOnly)
-        if pos_size <= 0 and open_orders:
-            for o in open_orders:
+        # If no position at all, cancel only reduceOnly orders (and honor grace window if provided)
+        if pos_size <= 0 and reduce_only:
+            for o in reduce_only:
                 try:
+                    if grace_cutoff_ms is not None:
+                        ts = (o.get("timestamp") or (o.get("info", {}) or {}).get("time"))
+                        if ts and ts >= grace_cutoff_ms:
+                            continue
                     ex.cancel_order(o["id"], symbol)
-                    log(f"Canceled orphan order {o.get('id')} on {symbol}")
+                    log(f"Canceled orphan reduceOnly order {o.get('id')} on {symbol}")
                 except Exception as e:
                     log(f"Failed to cancel orphan order {o.get('id')} on {symbol}: {e}")
         elif pos_size > 0 and reduce_only:
@@ -216,6 +220,10 @@ def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
             live_sides = set([p.get("side") for p in (pos if isinstance(pos, list) else [pos]) if p])
             for o in reduce_only:
                 try:
+                    if grace_cutoff_ms is not None:
+                        ts = (o.get("timestamp") or (o.get("info", {}) or {}).get("time"))
+                        if ts and ts >= grace_cutoff_ms:
+                            continue
                     ps = ((o.get("params", {}) or {}).get("positionSide") or (o.get("info", {}) or {}).get("positionSide"))
                     # If exchange embeds side via order side, infer intended position side
                     o_side = (o.get("side") or "").lower()

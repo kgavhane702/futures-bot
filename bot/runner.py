@@ -8,6 +8,13 @@ from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
                      PROTECTION_CHECK_SECONDS, USE_FLIP_EXIT, FLIP_CONFIRM_BARS, USE_TRAILING, ENTRY_SLIPPAGE_MAX_PCT, TOTAL_NOTIONAL_CAP_FRACTION, LEVERAGE)
 from .logging_utils import log
+try:
+    from .web import start_web_server, update_state
+except Exception:
+    def start_web_server():
+        pass
+    def update_state(**kwargs):
+        return {}
 from .exchange_client import get_exchange, ensure_symbol_config, round_amount
 from .universe import top_usdt_perps
 from .indicators import fetch_ohlcv_df, add_indicators, valid_row
@@ -95,6 +102,14 @@ def main():
 
     threading.Thread(target=protection_checker, daemon=True).start()
 
+    # Start web UI if enabled
+    try:
+        from .config import ENABLE_WEB
+        if ENABLE_WEB:
+            start_web_server()
+    except Exception:
+        pass
+
     while True:
         try:
             # Wait for new closed LTF candle
@@ -127,14 +142,17 @@ def main():
                 continue
             last_candle_time = latest_closed_ts
             log(f"New {TIMEFRAME} close @ {latest_closed_ts}")
+            update_state(last_candle_time=str(latest_closed_ts))
 
             # Universe & snapshot
             universe = top_usdt_perps(ex, UNIVERSE_SIZE)
             log("Universe:", ", ".join(universe))
+            update_state(universe=universe)
 
             open_pos = get_open_positions(ex)
             open_syms = set(open_pos.keys())
             log("Open positions:", open_pos)
+            update_state(positions=open_pos)
 
             # Reconcile orphan open orders (no pos -> cancel all orders)
             # Include any symbols that have open orders even if not in universe
@@ -148,7 +166,9 @@ def main():
                 except Exception:
                     has_orders = False
                 if has_orders or (sym in open_syms) or (sym in universe):
-                    reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym))
+                    # Pass grace cutoff for fresh orders to avoid canceling brand-new protections
+                    fresh_cutoff = time.time() * 1000 - (ORPHAN_SWEEP_GRACE_SECONDS * 1000)
+                    reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym), grace_cutoff_ms=fresh_cutoff)
 
             # Scan signals
             cands = []
@@ -169,6 +189,7 @@ def main():
 
             cands.sort(key=lambda x: x[4], reverse=True)
             log("Top signals:", cands[:5])
+            update_state(signals=cands[:10])
 
             equity = equity_from_balance(ex)
             placed = 0
