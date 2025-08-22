@@ -55,3 +55,5 @@ ALLOW_SHORTS = os.getenv("ALLOW_SHORTS", "true").lower() == "true"
 HEDGE_MODE   = os.getenv("HEDGE_MODE", "false").lower() == "true"  # assume one-way unless true
 ENTRY_SLIPPAGE_MAX_PCT = float(os.getenv("ENTRY_SLIPPAGE_MAX_PCT", "0.01"))  # 1% max slippage guard
 ORPHAN_SWEEP_SECONDS = int(os.getenv("ORPHAN_SWEEP_SECONDS", "10"))
+ORPHAN_SWEEP_GRACE_SECONDS = int(os.getenv("ORPHAN_SWEEP_GRACE_SECONDS", "60"))
+PROTECTION_CHECK_SECONDS = int(os.getenv("PROTECTION_CHECK_SECONDS", "7"))

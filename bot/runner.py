@@ -5,7 +5,8 @@ import ccxt
 
 from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      ATR_MULT_SL, TP_R_MULT, POLL_SECONDS, TRADES_CSV, DRY_RUN,
-                     BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS)
+                     BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
+                     PROTECTION_CHECK_SECONDS)
 from .logging_utils import log
 from .exchange_client import get_exchange, ensure_symbol_config, round_amount
 from .universe import top_usdt_perps
@@ -30,6 +31,7 @@ def main():
     def orphan_sweeper():
         while True:
             try:
+                sweep_canceled = 0
                 open_pos_bg = get_open_positions(ex)
                 open_syms_bg = set(open_pos_bg.keys())
                 try:
@@ -38,14 +40,60 @@ def main():
                     all_markets_bg = []
                 for sym in set(all_markets_bg) | open_syms_bg:
                     try:
+                        ords = get_open_orders(ex, sym) or []
+                        # Skip protection for very fresh orders to avoid racing entry flow
+                        fresh_cutoff = time.time() * 1000 - (ORPHAN_SWEEP_GRACE_SECONDS * 1000)
+                        ords_keep = []
+                        for o in ords:
+                            try:
+                                ts = (o.get("timestamp") or (o.get("info", {}) or {}).get("time"))
+                                if ts and ts >= fresh_cutoff:
+                                    ords_keep.append(o)
+                            except Exception:
+                                pass
+                        before = len(ords)
                         reconcile_orphan_reduce_only_orders(ex, sym, open_pos_bg.get(sym))
+                        after = len(get_open_orders(ex, sym) or [])
+                        if before and after is not None and after < before:
+                            sweep_canceled += (before - after)
                     except Exception:
                         pass
             except Exception:
                 pass
+            if sweep_canceled:
+                log("Orphan sweep canceled orders:", sweep_canceled)
             time.sleep(ORPHAN_SWEEP_SECONDS)
 
     threading.Thread(target=orphan_sweeper, daemon=True).start()
+
+    # Background protection checker: ensures SL/TP exist for each live position
+    def protection_checker():
+        while True:
+            try:
+                open_pos_pc = get_open_positions(ex)
+                for sym, pos in open_pos_pc.items():
+                    try:
+                        ltf = fetch_ohlcv_df(ex, sym, TIMEFRAME, limit=5)
+                        ltf = add_indicators(ltf)
+                        last = ltf.iloc[-1]
+                        prev = ltf.iloc[-2]
+                        atr = float(prev["atr"]) if not pd.isna(prev["atr"]) else (float(last["atr"]) if not pd.isna(last["atr"]) else 0.0)
+                    except Exception:
+                        atr = 0.0
+                    pos_list = pos if isinstance(pos, list) else [pos]
+                    for p in pos_list:
+                        try:
+                            side = "buy" if p.get("side") == "long" else "sell"
+                            entry_ref = p.get("entry") or float(last.get("close"))
+                            ensure_protection_orders(ex, sym, side, p.get("size", 0.0), entry_ref, atr,
+                                                     ATR_MULT_SL, TP_R_MULT)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            time.sleep(PROTECTION_CHECK_SECONDS)
+
+    threading.Thread(target=protection_checker, daemon=True).start()
 
     while True:
         try:

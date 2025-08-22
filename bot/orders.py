@@ -69,8 +69,6 @@ def cancel_reduce_only_orders(ex, symbol):
 
 def _is_take_profit(o) -> bool:
     try:
-        if not o.get("reduceOnly"):
-            return False
         t = (o.get("type") or "").upper()
         it = (o.get("info", {}) or {}).get("type", "").upper()
         return ("TAKE_PROFIT" in t) or ("TAKE_PROFIT" in it)
@@ -79,12 +77,11 @@ def _is_take_profit(o) -> bool:
 
 def _is_stop_loss(o) -> bool:
     try:
-        if not o.get("reduceOnly"):
-            return False
-        if _is_take_profit(o):
-            return False
         t = (o.get("type") or "").upper()
         it = (o.get("info", {}) or {}).get("type", "").upper()
+        # STOP_MARKET/STOP and not TAKE_PROFIT
+        if ("TAKE_PROFIT" in t) or ("TAKE_PROFIT" in it):
+            return False
         return ("STOP" in t) or ("STOP" in it)
     except Exception:
         return False
@@ -213,6 +210,26 @@ def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
                     log(f"Canceled orphan order {o.get('id')} on {symbol}")
                 except Exception as e:
                     log(f"Failed to cancel orphan order {o.get('id')} on {symbol}: {e}")
+        elif pos_size > 0 and reduce_only:
+            # Hedge hygiene: if a specific side is open, cancel reduceOnly orders that target the opposite side
+            # Determine live sides
+            live_sides = set([p.get("side") for p in (pos if isinstance(pos, list) else [pos]) if p])
+            for o in reduce_only:
+                try:
+                    ps = ((o.get("params", {}) or {}).get("positionSide") or (o.get("info", {}) or {}).get("positionSide"))
+                    # If exchange embeds side via order side, infer intended position side
+                    o_side = (o.get("side") or "").lower()
+                    intended = None
+                    if ps:
+                        intended = "long" if str(ps).upper() == "LONG" else "short" if str(ps).upper() == "SHORT" else None
+                    elif o_side in ("buy","sell"):
+                        # For reduceOnly: buy reduces short, sell reduces long
+                        intended = "short" if o_side == "buy" else "long"
+                    if intended and intended not in live_sides:
+                        ex.cancel_order(o["id"], symbol)
+                        log(f"Canceled mismatched RO order {o.get('id')} ({intended}) on {symbol}")
+                except Exception:
+                    pass
     except Exception as e:
         log("reconcile_orphan_reduce_only_orders error", symbol, str(e))
 
