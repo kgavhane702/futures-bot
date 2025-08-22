@@ -32,20 +32,29 @@ def write_trade(row):
     pd.DataFrame([row]).to_csv(TRADES_CSV, mode="a", index=False, header=header)
 
 def main():
-    ex = get_exchange()
-    ex.load_markets()
-    last_candle_time = None
-    last_orphan_sweep_ts = 0
-
-    # No background threads in simplified mode (avoid automatic repairs/sweeps)
-
-    # Start web UI if enabled
+    # Start web UI if enabled (start first so Admin is available even without API keys)
     try:
         from .config import ENABLE_WEB
         if ENABLE_WEB:
             start_web_server()
     except Exception:
         pass
+
+    # Wait for API credentials if missing/invalid; allow updating via Admin UI
+    while True:
+        try:
+            ex = get_exchange()
+            ex.load_markets()
+            break
+        except Exception as e:
+            log("Exchange init failed; waiting for valid API credentials…", str(e))
+            time.sleep(5)
+    last_candle_time = None
+    last_orphan_sweep_ts = 0
+
+    # No background threads in simplified mode (avoid automatic repairs/sweeps)
+
+    # Web UI already started above
 
     while True:
         try:

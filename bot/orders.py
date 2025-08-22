@@ -61,8 +61,8 @@ def get_open_orders(ex, symbol):
 def cancel_reduce_only_orders(ex, symbol):
     try:
         for o in get_open_orders(ex, symbol):
-            # Cancel any reduceOnly orders OR any protection orders (SL/TP) to avoid leftovers
-            if o.get("reduceOnly") or _is_stop_loss(o) or _is_take_profit(o):
+            # Only cancel reduceOnly orders; leave existing SL/TP untouched
+            if o.get("reduceOnly"):
                 try:
                     ex.cancel_order(o["id"], symbol)
                 except Exception:
@@ -391,8 +391,8 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         raise
 
     # Protective orders
-    params_sl = {"closePosition": True}
-    params_tp_base = {"reduceOnly": True}
+    params_sl = {"closePosition": True, "workingType": "MARK_PRICE", "priceProtect": True}
+    params_tp_base = {"reduceOnly": True, "workingType": "MARK_PRICE", "priceProtect": True}
     if HEDGE_MODE:
         params_sl["positionSide"] = "LONG" if side == "buy" else "SHORT"
         params_tp_base["positionSide"] = "LONG" if side == "buy" else "SHORT"
@@ -422,6 +422,42 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
             except Exception as e:
                 tps_ok = False
                 log(f"Failed to place TP{i}:", str(e))
+
+    # Single retry with extra buffer if any placement failed (no background thread)
+    if not sl_ok or not tps_ok:
+        try:
+            tick = get_price_increment(ex, symbol)
+        except Exception:
+            tick = 0.0
+        # widen buffers
+        if not sl_ok:
+            if side == "buy":
+                sl_retry = round_price(ex, symbol, min(sl_price, entry_price - 2 * tick))
+            else:
+                sl_retry = round_price(ex, symbol, max(sl_price, entry_price + 2 * tick))
+            try:
+                with _lock_for(symbol):
+                    ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=None,
+                                    params={**params_sl, "newClientOrderId": new_client_id("prot_slr"),
+                                            "stopPrice": float(sl_retry)})
+                log("SL retry placed", sl_retry)
+                sl_ok = True
+            except Exception as e:
+                log("SL retry failed:", str(e))
+        if not tps_ok:
+            with _lock_for(symbol):
+                for i, (tpp, amt) in enumerate(zip(tps_adjusted, tp_amounts), start=1):
+                    if amt <= 0:
+                        continue
+                    try:
+                        # nudge TP away by one extra tick
+                        tpp_retry = round_price(ex, symbol, (tpp + tick) if side == "buy" else (tpp - tick))
+                        ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=amt,
+                                        params={**params_tp_base, "newClientOrderId": new_client_id(f"prot_tp{i}r"),
+                                                "stopPrice": float(tpp_retry)})
+                        log(f"TP{i} retry placed", tpp_retry, amt)
+                    except Exception as e:
+                        log(f"TP{i} retry failed:", str(e))
     # Invariant check: ensure protections exist (non-fatal)
     try:
         open_after = get_open_orders(ex, symbol)

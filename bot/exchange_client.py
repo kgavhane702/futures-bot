@@ -1,13 +1,14 @@
-import time, random, string
+import time, random, string, os
 import ccxt
-from .config import EXCHANGE_ID, API_KEY, API_SECRET, USE_TESTNET, LEVERAGE, MARGIN_MODE, HEDGE_MODE
+from .config import EXCHANGE_ID, USE_TESTNET, LEVERAGE, MARGIN_MODE, HEDGE_MODE
 from .logging_utils import log
 
 def get_exchange():
     klass = getattr(ccxt, EXCHANGE_ID)
+    # Read API credentials from environment each time to allow UI updates without full reload
     ex = klass({
-        "apiKey": API_KEY,
-        "secret": API_SECRET,
+        "apiKey": os.getenv("API_KEY", ""),
+        "secret": os.getenv("API_SECRET", ""),
         "enableRateLimit": True,
         "options": {
             "defaultType": "future",     # Futures only

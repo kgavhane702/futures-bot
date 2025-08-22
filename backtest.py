@@ -23,9 +23,6 @@ UNIVERSE_SIZE = cfg["UNIVERSE_SIZE"]
 
 ATR_MULT_SL = cfg["ATR_MULT_SL"]
 TP_R_MULT = cfg["TP_R_MULT"]
-BREAKEVEN_AFTER_R = cfg["BREAKEVEN_AFTER_R"]
-TRAIL_AFTER_R = cfg["TRAIL_AFTER_R"]
-TRAIL_ATR_MULT = cfg["TRAIL_ATR_MULT"]
 MAX_SL_PCT = cfg["MAX_SL_PCT"]
 STOP_CAP_BEHAVIOR = cfg["STOP_CAP_BEHAVIOR"]
 
@@ -58,8 +55,6 @@ def run_backtest(
     lookback_bars=1200,
     start_days_ago=90,
     end_days_ago=0,
-    use_trailing=True,
-    use_flip_exit=True,  # reserved for future refinement; not strictly required here
 ):
     """
     Bar-based simulator:
@@ -83,62 +78,84 @@ def run_backtest(
 
     trades = []           # list of {"symbol","R","time"}
     equity_r = [0.0]      # equity curve in R-units
-    open_positions = {}   # sym -> {"side","entry","sl","tp","r"}
+    open_positions = {}   # sym -> position state for multi-TP
 
-    def maybe_close(sym, price):
+    def step_multi_tp(sym, o, h, l, c):
         pos = open_positions.get(sym)
         if not pos:
             return False, 0.0
-        side, entry, sl, tp, r = pos["side"], pos["entry"], pos["sl"], pos["tp"], pos["r"]
-        if r <= 0:
-            open_positions.pop(sym, None)
-            return True, 0.0
+        side = pos["side"]  # "buy"/"sell"
+        entry = pos["entry"]
+        stage = pos["stage"]  # 0 before TP1, 1 after TP1, 2 after TP2
+        r_unit = pos["r_unit"]
+        tp1, tp2, tp3 = pos["tp1"], pos["tp2"], pos["tp3"]
+        sl = pos["sl"]
+        realized = pos.get("realized_R", 0.0)
 
-        if side == "buy":
-            if price <= sl:
-                open_positions.pop(sym, None)
-                return True, -1.0
-            if price >= tp:
-                open_positions.pop(sym, None)
-                return True, +TP_R_MULT
-        else:
-            if price >= sl:
-                open_positions.pop(sym, None)
-                return True, -1.0
-            if price <= tp:
-                open_positions.pop(sym, None)
-                return True, +TP_R_MULT
+        # Process within bar conservatively: SL check before TP at each stage
+        while True:
+            if side == "buy":
+                if stage == 0:
+                    if l <= sl:
+                        open_positions.pop(sym, None)
+                        return True, realized - 1.0
+                    if h >= tp1:
+                        realized += 0.5 * 1.0
+                        sl = entry
+                        stage = 1
+                        continue
+                elif stage == 1:
+                    if l <= sl:  # at entry
+                        open_positions.pop(sym, None)
+                        return True, realized + 0.0
+                    if h >= tp2:
+                        realized += 0.3 * 2.0
+                        sl = tp1
+                        stage = 2
+                        continue
+                elif stage == 2:
+                    if l <= sl:  # at tp1
+                        realized += 0.2 * 1.0
+                        open_positions.pop(sym, None)
+                        return True, realized
+                    if h >= tp3:
+                        realized += 0.2 * 3.0
+                        open_positions.pop(sym, None)
+                        return True, realized
+                break
+            else:  # sell
+                if stage == 0:
+                    if h >= sl:
+                        open_positions.pop(sym, None)
+                        return True, realized - 1.0
+                    if l <= tp1:
+                        realized += 0.5 * 1.0
+                        sl = entry
+                        stage = 1
+                        continue
+                elif stage == 1:
+                    if h >= sl:
+                        open_positions.pop(sym, None)
+                        return True, realized + 0.0
+                    if l <= tp2:
+                        realized += 0.3 * 2.0
+                        sl = tp1
+                        stage = 2
+                        continue
+                elif stage == 2:
+                    if h >= sl:
+                        realized += 0.2 * 1.0
+                        open_positions.pop(sym, None)
+                        return True, realized
+                    if l <= tp3:
+                        realized += 0.2 * 3.0
+                        open_positions.pop(sym, None)
+                        return True, realized
+                break
+
+        # Persist updates if not exited
+        pos["stage"], pos["sl"], pos["realized_R"] = stage, sl, realized
         return False, 0.0
-
-    def maybe_trail(sym, last_price, prev_atr):
-        if not use_trailing:
-            return
-        pos = open_positions.get(sym)
-        if not pos:
-            return
-        side, entry, sl, tp, r = pos["side"], pos["entry"], pos["sl"], pos["tp"], pos["r"]
-        if r <= 0 or (prev_atr is None or prev_atr <= 0):
-            return
-
-        r_unit = ATR_MULT_SL * prev_atr
-        if side == "buy":
-            be_trigger = entry + BREAKEVEN_AFTER_R * r_unit
-            trail_trigger = entry + TRAIL_AFTER_R * r_unit
-            if last_price < be_trigger:
-                return
-            candidate = entry if last_price < trail_trigger else (last_price - TRAIL_ATR_MULT * prev_atr)
-            new_sl = max(sl, candidate, entry)
-            if new_sl > sl:
-                pos["sl"] = new_sl
-        else:
-            be_trigger = entry - BREAKEVEN_AFTER_R * r_unit
-            trail_trigger = entry - TRAIL_AFTER_R * r_unit
-            if last_price > be_trigger:
-                return
-            candidate = entry if last_price > trail_trigger else (last_price + TRAIL_ATR_MULT * prev_atr)
-            new_sl = min(sl, candidate, entry)
-            if new_sl < sl:
-                pos["sl"] = new_sl
 
     # Build candidates (mimic live scoring)
     cands = []
@@ -171,9 +188,7 @@ def run_backtest(
 
             # Manage open pos first
             if sym in open_positions:
-                prev_atr = float(prev.get("atr") or 0)
-                maybe_trail(sym, float(row["close"]), prev_atr)
-                closed, rres = maybe_close(sym, float(row["close"]))
+                closed, rres = step_multi_tp(sym, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
                 if closed:
                     trades.append({"symbol": sym, "R": rres, "time": row["ts"]})
                     equity_r.append(equity_r[-1] + rres)
@@ -194,10 +209,10 @@ def run_backtest(
                     continue
 
                 side_ex = "buy" if side == "long" else "sell"
-                stop, tp, r = protective_prices(side_ex, entry, atr, ATR_MULT_SL, TP_R_MULT)
+                stop, _tp_single, r = protective_prices(side_ex, entry, atr, ATR_MULT_SL, TP_R_MULT)
 
                 # Respect STOP_CAP_BEHAVIOR=skip (protective_prices will return None/invalid r)
-                if stop is None or tp is None or r <= 0:
+                if stop is None or r <= 0:
                     continue
 
                 # Entry slippage check (approx vs prev close)
@@ -205,18 +220,38 @@ def run_backtest(
                 if slip > ENTRY_SLIPPAGE_MAX_PCT:
                     continue
 
-                open_positions[sym] = {"side": side_ex, "entry": entry, "sl": stop, "tp": tp, "r": r}
+                # Build multi-TP targets based on 1R,2R,3R from entry and stop
+                if side_ex == "buy":
+                    tp1 = entry + 1.0 * r
+                    tp2 = entry + 2.0 * r
+                    tp3 = entry + 3.0 * r
+                else:
+                    tp1 = entry - 1.0 * r
+                    tp2 = entry - 2.0 * r
+                    tp3 = entry - 3.0 * r
+                open_positions[sym] = {
+                    "side": side_ex,
+                    "entry": entry,
+                    "sl": stop,
+                    "r_unit": r,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
+                    "stage": 0,
+                    "realized_R": 0.0,
+                }
 
-            # If still open after entry, see if SL/TP got hit by close
+            # If still open after entry, process this bar
             if sym in open_positions:
-                closed, rres = maybe_close(sym, float(row["close"]))
+                closed, rres = step_multi_tp(sym, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
                 if closed:
                     trades.append({"symbol": sym, "R": rres, "time": row["ts"]})
                     equity_r.append(equity_r[-1] + rres)
 
-        # Force-close any leftover at end (mark to market 0R)
+        # Force-close any leftover at end (mark to market realized so far)
         if sym in open_positions:
-            trades.append({"symbol": sym, "R": 0.0, "time": df.iloc[-1]["ts"]})
+            pos = open_positions[sym]
+            trades.append({"symbol": sym, "R": pos.get("realized_R", 0.0), "time": df.iloc[-1]["ts"]})
             open_positions.pop(sym, None)
 
     # ---- Metrics ----
@@ -256,18 +291,16 @@ if __name__ == "__main__":
     ex = get_exchange()
     ex.load_markets()
     universe = top_usdt_perps(ex, UNIVERSE_SIZE)
-    print("Universe:", universe[:12])
+    print("Universe (first N shown):", universe[:UNIVERSE_SIZE])
 
     summary, trades, equity_r = run_backtest(
         ex,
-        symbols=universe[:12],           # limit for speed; adjust as you like
+        symbols=universe[:UNIVERSE_SIZE],
         timeframe=TIMEFRAME,
         htf_timeframe=HTF_TIMEFRAME,
         lookback_bars=1200,
         start_days_ago=90,
         end_days_ago=0,
-        use_trailing=True,
-        use_flip_exit=True
     )
 
     print("\n=== Backtest Summary (last ~90 days) ===")
