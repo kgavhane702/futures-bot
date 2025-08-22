@@ -1,10 +1,10 @@
 import threading
 from datetime import datetime, UTC
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response
 import os, subprocess, sys
 
 from .config import WEB_HOST, WEB_PORT
-from .logging_utils import log
+from .logging_utils import log, recent_logs, subscribe_logs, unsubscribe_logs
 
 app = Flask(__name__, template_folder="webapp/templates")
 
@@ -50,19 +50,37 @@ def ui():
 
 @app.get("/admin")
 def admin_page():
-    # Load current env snapshot (mask secrets)
-    env_keys = [
-        "EXCHANGE","API_KEY","API_SECRET","USE_TESTNET","TIMEFRAME","HTF_TIMEFRAME",
-        "UNIVERSE_SIZE","UNIVERSE_SYMBOLS","MAX_POSITIONS","ACCOUNT_EQUITY_USDT","RISK_PER_TRADE","ABS_RISK_USDT",
-        "LEVERAGE","MARGIN_MODE","MAX_NOTIONAL_FRACTION","MIN_NOTIONAL_USDT","MARGIN_BUFFER_FRAC",
-        "TOTAL_NOTIONAL_CAP_FRACTION","ATR_MULT_SL","TP_R_MULT","MAX_SL_PCT",
-        "ENTRY_SLIPPAGE_MAX_PCT","POLL_SECONDS","LOG_TRADES_CSV","DRY_RUN","ALLOW_SHORTS",
-        "HEDGE_MODE","ENABLE_WEB","WEB_HOST","WEB_PORT"
-    ]
-    current = {k: os.getenv(k, "") for k in env_keys}
+    # Only show credentials on the Admin page
+    current = {
+        "API_KEY": os.getenv("API_KEY", ""),
+        "API_SECRET": os.getenv("API_SECRET", ""),
+        "UNIVERSE_SIZE": os.getenv("UNIVERSE_SIZE", ""),
+    }
     if current.get("API_KEY"): current["API_KEY"] = "***" + current["API_KEY"][-4:]
     if current.get("API_SECRET"): current["API_SECRET"] = "***" + current["API_SECRET"][-4:]
     return render_template("admin.html", env=current)
+
+@app.get("/api/logs")
+def api_logs_snapshot():
+    try:
+        return jsonify({"lines": recent_logs()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/logs/stream")
+def api_logs_stream():
+    def event_stream():
+        q = subscribe_logs()
+        # send recent buffer first
+        for line in recent_logs():
+            yield f"data: {line}\n\n"
+        try:
+            while True:
+                line = q.get()
+                yield f"data: {line}\n\n"
+        finally:
+            unsubscribe_logs(q)
+    return Response(event_stream(), mimetype='text/event-stream')
 
 @app.get("/api/config")
 def api_config():
@@ -78,9 +96,13 @@ def api_config():
 
 @app.post("/api/env")
 def api_env_update():
-    # Update .env with provided key/values
+    # Restrict updates to selected keys only
     try:
         body = request.get_json(force=True) or {}
+        allowed_keys = {"API_KEY", "API_SECRET", "UNIVERSE_SIZE"}
+        allowed = {k: v for k, v in body.items() if k in allowed_keys and isinstance(v, str)}
+        if not allowed:
+            return jsonify({"ok": False, "error": "No allowed keys provided"}), 400
         path = os.path.join(os.getcwd(), ".env")
         lines = []
         if os.path.exists(path):
@@ -92,14 +114,18 @@ def api_env_update():
             if "=" in ln and not ln.strip().startswith("#"):
                 k, v = ln.split("=", 1)
                 kv[k] = v
-        for k, v in body.items():
-            if not isinstance(v, str):
-                v = str(v)
+        # Apply allowed updates; skip blanks to retain current values
+        for k, v in allowed.items():
+            if v.strip() == "":
+                continue
+            # Ignore masked credential placeholders from UI
+            if k in ("API_KEY", "API_SECRET") and v.strip().startswith("***"):
+                continue
             kv[k] = v
         out = [f"{k}={kv[k]}" for k in kv]
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(out) + "\n")
-        return jsonify({"ok": True, "updated": list(body.keys())})
+        return jsonify({"ok": True, "updated": list(allowed.keys())})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

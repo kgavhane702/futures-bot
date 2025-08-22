@@ -8,6 +8,8 @@ from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
                      PROTECTION_CHECK_SECONDS, ENTRY_SLIPPAGE_MAX_PCT, TOTAL_NOTIONAL_CAP_FRACTION, LEVERAGE)
 from .logging_utils import log
+from .web import get_control_flags
+import os, sys
 try:
     from .web import start_web_server, update_state
 except Exception:
@@ -21,7 +23,9 @@ from .indicators import fetch_ohlcv_df, add_indicators, valid_row
 from .signals import trend_and_signal, score_signal
 from .risk import equity_from_balance, size_position, protective_prices
 from .orders import (get_open_positions, get_open_orders, cancel_reduce_only_orders, place_bracket_orders,
-                     reconcile_orphan_reduce_only_orders)
+                     reconcile_orphan_reduce_only_orders, replace_stop_loss_close_position,
+                     get_current_stop_loss_price, cancel_stop_loss_orders,
+                     adjust_protection_prices, enforce_trigger_distance_with_last)
 
 def write_trade(row):
     header = not os.path.exists(TRADES_CSV)
@@ -196,7 +200,7 @@ def main():
                 except Exception as e:
                     log("Order flow error:", sym, str(e))
 
-            # Manage open positions (no auto-repair/trailing)
+            # Manage open positions (multi-TP SL management)
             current_pos = get_open_positions(ex)
             for sym, pos in current_pos.items():
                 try:
@@ -217,12 +221,96 @@ def main():
                         atr_last = None
                     atr_for_prot = atr_prev if (atr_prev is not None and atr_prev > 0) else (atr_last if (atr_last is not None and atr_last > 0) else 0.0)
                     for p in pos_list:
-                        # Simplified: do nothing here; rely on initial protections only
-                        pass
+                        side = p.get("side")
+                        if side not in ("long", "short"):
+                            continue
+                        ex_side = "buy" if side == "long" else "sell"
+                        opp_side = "sell" if ex_side == "buy" else "buy"
+                        entry = p.get("entry")
+                        if entry is None:
+                            continue
+                        entry = float(entry)
+                        # Inspect open orders to infer TP stage
+                        olist = get_open_orders(ex, sym)
+                        # Filter TPs and extract prices
+                        tp_prices = []
+                        for o in olist:
+                            try:
+                                t = (o.get("type") or "").upper()
+                                it = (o.get("info", {}) or {}).get("type", "").upper()
+                                if ("TAKE_PROFIT" in t) or ("TAKE_PROFIT" in it):
+                                    sp = o.get("stopPrice")
+                                    if sp is None:
+                                        sp = (o.get("info", {}) or {}).get("stopPrice")
+                                    if sp is None:
+                                        sp = (o.get("info", {}) or {}).get("triggerPrice")
+                                    if sp is not None:
+                                        tp_prices.append(float(sp))
+                            except Exception:
+                                continue
+                        # Get current SL range for comparison
+                        sl_range = get_current_stop_loss_price(ex, sym, position_side=("LONG" if ex_side=="buy" else "SHORT") if False else None)
+                        current_sl_min = None
+                        current_sl_max = None
+                        if isinstance(sl_range, tuple):
+                            current_sl_min, current_sl_max = sl_range
+                        num_tp_open = len(tp_prices)
+                        if num_tp_open >= 3:
+                            # Nothing to do
+                            continue
+                        try:
+                            tkr = ex.fetch_ticker(sym)
+                            last_px = float(tkr.get("last") or tkr.get("close") or entry)
+                        except Exception:
+                            last_px = entry
+                        if num_tp_open == 2:
+                            # After TP1 fill: move SL to entry
+                            target_sl = entry
+                            # Align to exchange constraints
+                            target_sl, _tmp = adjust_protection_prices(ex, sym, ex_side, entry, target_sl, entry)
+                            target_sl, _tmp = enforce_trigger_distance_with_last(ex, sym, ex_side, last_px, target_sl, _tmp)
+                            # Skip if already at/ beyond target (with tolerance)
+                            if ex_side == "buy" and current_sl_max is not None and current_sl_max >= target_sl - 1e-9:
+                                continue
+                            if ex_side == "sell" and current_sl_min is not None and current_sl_min <= target_sl + 1e-9:
+                                continue
+                            replace_stop_loss_close_position(ex, sym, ex_side, target_sl)
+                            log("SL moved to entry after TP1", sym, target_sl)
+                        elif num_tp_open == 1:
+                            # After TP2 fill: move SL to TP1 price = entry +/- 1R inferred from remaining TP3
+                            only_tp = float(tp_prices[0])
+                            # Infer 1R
+                            r_unit = abs(only_tp - entry) / 3.0
+                            target_sl = entry + (r_unit if ex_side == "buy" else -r_unit)
+                            target_sl, _tmp = adjust_protection_prices(ex, sym, ex_side, entry, target_sl, only_tp)
+                            target_sl, _tmp = enforce_trigger_distance_with_last(ex, sym, ex_side, last_px, target_sl, _tmp)
+                            if ex_side == "buy" and current_sl_max is not None and current_sl_max >= target_sl - 1e-9:
+                                continue
+                            if ex_side == "sell" and current_sl_min is not None and current_sl_min <= target_sl + 1e-9:
+                                continue
+                            replace_stop_loss_close_position(ex, sym, ex_side, target_sl)
+                            log("SL moved to TP1 after TP2", sym, target_sl)
+                        else:
+                            # After TP3 fill: cancel SL
+                            try:
+                                cancel_stop_loss_orders(ex, sym, position_side=("LONG" if ex_side=="buy" else "SHORT") if False else None)
+                                log("SL canceled after TP3", sym)
+                            except Exception:
+                                pass
                 except Exception as e:
                     log("manage fail", sym, str(e))
 
             time.sleep(POLL_SECONDS)
+
+            # Check restart flag from admin
+            try:
+                flags = get_control_flags()
+                if flags.get("restart"):
+                    log("Restart flag detected; re-exec process…")
+                    python = sys.executable
+                    os.execv(python, [python, "run.py"])  # replace current process
+            except Exception:
+                pass
 
         except KeyboardInterrupt:
             log("Stopping…")

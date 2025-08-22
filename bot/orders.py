@@ -61,7 +61,8 @@ def get_open_orders(ex, symbol):
 def cancel_reduce_only_orders(ex, symbol):
     try:
         for o in get_open_orders(ex, symbol):
-            if o.get("reduceOnly"):
+            # Cancel any reduceOnly orders OR any protection orders (SL/TP) to avoid leftovers
+            if o.get("reduceOnly") or _is_stop_loss(o) or _is_take_profit(o):
                 try:
                     ex.cancel_order(o["id"], symbol)
                 except Exception:
@@ -188,6 +189,67 @@ def enforce_trigger_distance_with_last(ex, symbol: str, side: str, last_price: f
         tp   = round_price(ex, symbol, min(tp,   last_price - tick))
     return stop, tp
 
+def _r_unit_from_entry_and_stop(side: str, entry: float, stop: float) -> float:
+    try:
+        entry = float(entry)
+        stop = float(stop)
+    except Exception:
+        return 0.0
+    if side == "buy":
+        return max(0.0, entry - stop)
+    else:
+        return max(0.0, stop - entry)
+
+def _tp_prices_from_r_levels(side: str, entry: float, r_unit: float, r_levels: list[float]) -> list[float]:
+    prices: list[float] = []
+    for r_mult in r_levels:
+        if side == "buy":
+            prices.append(entry + r_mult * r_unit)
+        else:
+            prices.append(entry - r_mult * r_unit)
+    return prices
+
+def _split_amounts(ex, symbol: str, qty: float, splits: list[float]) -> list[float]:
+    # Create amounts q1,q2,q3 that sum to <= qty after rounding
+    rounded: list[float] = []
+    remaining = qty
+    for i, s in enumerate(splits):
+        part = qty * s
+        if i < len(splits) - 1:
+            part = round_amount(ex, symbol, part)
+            part = min(part, remaining)
+            rounded.append(part)
+            remaining = max(0.0, remaining - part)
+        else:
+            # Last leg takes the remainder
+            part = round_amount(ex, symbol, remaining)
+            rounded.append(part)
+            remaining = max(0.0, remaining - part)
+    # If rounding zeroed out a leg, shift remainder to first non-zero
+    total = sum(rounded)
+    if total <= 0 and len(rounded) > 0:
+        rounded[0] = round_amount(ex, symbol, qty)
+    return rounded
+
+def replace_stop_loss_close_position(ex, symbol: str, side: str, new_stop_price: float):
+    # Cancel existing SLs and place a new closePosition STOP_MARKET at new_stop_price
+    position_side = "LONG" if side == "buy" else "SHORT" if HEDGE_MODE else None
+    try:
+        # Cancel all SL orders regardless of reduceOnly
+        for o in get_open_orders(ex, symbol):
+            if _is_stop_loss(o):
+                try:
+                    ex.cancel_order(o["id"], symbol)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    params_ro = {"closePosition": True, "newClientOrderId": new_client_id("prot_sl")}
+    if HEDGE_MODE and position_side:
+        params_ro["positionSide"] = position_side
+    ex.create_order(symbol, type="STOP_MARKET", side=("sell" if side == "buy" else "buy"), amount=None,
+                    params={**params_ro, "stopPrice": float(new_stop_price)})
+
 def _matches_position_side(o, position_side: str | None) -> bool:
     if not position_side:
         return True
@@ -281,16 +343,26 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
     qty = round_amount(ex, symbol, qty)
     entry_price = float(entry_price)
     sl_price = round_price(ex, symbol, sl_price)
-    tp_price = round_price(ex, symbol, tp_price)
-    # Centralized buffer/tick adjustment to avoid immediate trigger
-    sl_price, tp_price = adjust_protection_prices(ex, symbol, side, entry_price, sl_price, tp_price)
-    # Enforce additional distance against current market
+    # Multi-TP constants (fixed behavior)
+    TP_SPLITS = [0.5, 0.3, 0.2]
+    TP_R_LEVELS = [1.0, 2.0, 3.0]
+    # Compute R unit and TP prices
+    r_unit = _r_unit_from_entry_and_stop(side, entry_price, sl_price)
+    tp_prices = _tp_prices_from_r_levels(side, entry_price, r_unit, TP_R_LEVELS)
+    # Round and buffer each TP; also buffer SL
+    tps_adjusted: list[float] = []
     try:
         tkr = ex.fetch_ticker(symbol)
         last_px = float(tkr.get("last") or tkr.get("close") or entry_price)
-        sl_price, tp_price = enforce_trigger_distance_with_last(ex, symbol, side, last_px, sl_price, tp_price)
     except Exception:
-        pass
+        last_px = entry_price
+    # Adjust SL vs entry and last
+    sl_price, _tmp = adjust_protection_prices(ex, symbol, side, entry_price, sl_price, tp_prices[0])
+    sl_price, _tmp = enforce_trigger_distance_with_last(ex, symbol, side, last_px, sl_price, _tmp)
+    for tp in tp_prices:
+        _s, tp_adj = adjust_protection_prices(ex, symbol, side, entry_price, sl_price, tp)
+        _s2, tp_adj = enforce_trigger_distance_with_last(ex, symbol, side, last_px, _s, tp_adj)
+        tps_adjusted.append(round_price(ex, symbol, tp_adj))
 
     notional = qty * entry_price
     if notional < MIN_NOTIONAL_USDT:
@@ -302,8 +374,9 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
 
     if DRY_RUN:
         log(f"[DRY_RUN] ENTRY {side.upper()} {qty} {symbol} @~{entry_price}")
-        log(f"[DRY_RUN] SL reduceOnly {opposite.upper()} @ {sl_price}")
-        log(f"[DRY_RUN] TP reduceOnly {opposite.upper()} @ {tp_price}")
+        log(f"[DRY_RUN] SL closePosition {opposite.upper()} @ {sl_price}")
+        for i, tpp in enumerate(tps_adjusted, start=1):
+            log(f"[DRY_RUN] TP{i} reduceOnly {opposite.upper()} @ {tpp}")
         return {"id": f"dry_{new_client_id()}"}  # simulate
 
     # ENTRY
@@ -318,46 +391,67 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         raise
 
     # Protective orders
-    params_ro = {"closePosition": True}
+    params_sl = {"closePosition": True}
+    params_tp_base = {"reduceOnly": True}
     if HEDGE_MODE:
-        params_ro["positionSide"] = "LONG" if side == "buy" else "SHORT"
+        params_sl["positionSide"] = "LONG" if side == "buy" else "SHORT"
+        params_tp_base["positionSide"] = "LONG" if side == "buy" else "SHORT"
 
     sl_ok = True
-    tp_ok = True
+    tps_ok = True
+    # Split amounts for TPs
+    tp_amounts = _split_amounts(ex, symbol, qty, [0.5, 0.3, 0.2])
     with _lock_for(symbol):
         try:
             ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=None,
-                            params={**params_ro, "newClientOrderId": new_client_id("prot_sl"),
+                            params={**params_sl, "newClientOrderId": new_client_id("prot_sl"),
                                     "stopPrice": float(sl_price)})
             log("SL placed", sl_price)
         except Exception as e:
             sl_ok = False
             log("Failed to place SL:", str(e))
-        try:
-            ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=None,
-                            params={**params_ro, "newClientOrderId": new_client_id("prot_tp"),
-                                    "stopPrice": float(tp_price)})
-            log("TP placed", tp_price)
-        except Exception as e:
-            tp_ok = False
-            log("Failed to place TP:", str(e))
-
-    # If SL failed, do not auto-close; let protection checker recreate with cooldown
-    if not sl_ok:
-        log("SL placement failed; will rely on protection checker to recreate", symbol)
-        try:
-            from .config import ENTRY_PROTECTION_GRACE_SECS
-            _last_prot_ts[symbol] = int(time.time() * 1000) + ENTRY_PROTECTION_GRACE_SECS * 1000
-        except Exception:
-            _last_prot_ts[symbol] = int(time.time() * 1000) + 5000
-        return entry
-    # If only TP failed, keep the position open with SL and allow protection checker to recreate TP.
+        # 3 partial TPs
+        for i, (tpp, amt) in enumerate(zip(tps_adjusted, tp_amounts), start=1):
+            if amt <= 0:
+                continue
+            try:
+                ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=amt,
+                                params={**params_tp_base, "newClientOrderId": new_client_id(f"prot_tp{i}"),
+                                        "stopPrice": float(tpp)})
+                log(f"TP{i} placed", tpp, amt)
+            except Exception as e:
+                tps_ok = False
+                log(f"Failed to place TP{i}:", str(e))
+    # Invariant check: ensure protections exist (non-fatal)
     try:
-        from .config import ENTRY_PROTECTION_GRACE_SECS
-        _last_prot_ts[symbol] = int(time.time() * 1000) + ENTRY_PROTECTION_GRACE_SECS * 1000
+        open_after = get_open_orders(ex, symbol)
+        # Count SLs
+        sl_count = 0
+        tp_count = 0
+        for o in open_after:
+            if _is_stop_loss(o):
+                if HEDGE_MODE:
+                    ps = ((o.get("params", {}) or {}).get("positionSide") or (o.get("info", {}) or {}).get("positionSide"))
+                    desired = "LONG" if side == "buy" else "SHORT"
+                    if ps and str(ps).upper() != desired:
+                        continue
+                sl_count += 1
+            elif _is_take_profit(o):
+                if HEDGE_MODE:
+                    ps = ((o.get("params", {}) or {}).get("positionSide") or (o.get("info", {}) or {}).get("positionSide"))
+                    desired = "LONG" if side == "buy" else "SHORT"
+                    if ps and str(ps).upper() != desired:
+                        continue
+                tp_count += 1
+        expected_tps = sum(1 for a in tp_amounts if a > 0)
+        if sl_count < 1:
+            log("WARN protections: SL not found right after placement", symbol)
+        if tp_count < expected_tps:
+            log("WARN protections: fewer TP orders than expected", symbol, tp_count, "<", expected_tps)
     except Exception:
-        _last_prot_ts[symbol] = int(time.time() * 1000) + 5000
+        pass
 
+    # Even if some TP failed, keep position open with SL.
     return entry
 
 def maybe_update_trailing(ex, symbol, side, qty, entry, atr, last_price,

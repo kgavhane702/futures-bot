@@ -52,6 +52,10 @@
           <div class="muted">Sweeper: <span id="sweep"></span></div>
           <div class="muted">Server time: <span id="server_time"></span></div>
         </div>
+        <div class="card">
+          <div class="title">Live Logs</div>
+          <pre id="logs" style="max-height:300px;overflow:auto"></pre>
+        </div>
       </div>
     </div>
     <script>
@@ -85,6 +89,22 @@
         } catch(e) {}
       }
       refresh(); setInterval(refresh, 4000);
+
+      // Live log stream via SSE
+      (function(){
+        const el = document.getElementById('logs');
+        try {
+          const es = new EventSource('/api/logs/stream');
+          es.onmessage = (e)=>{
+            el.textContent += (e.data + "\n");
+            el.scrollTop = el.scrollHeight;
+          };
+        } catch(err) {
+          fetch('/api/logs').then(r=>r.json()).then(j=>{
+            el.textContent = (j.lines||[]).join('\n');
+          });
+        }
+      })();
     </script>
   </body>
  </html>

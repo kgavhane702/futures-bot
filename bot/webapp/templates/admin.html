@@ -24,101 +24,41 @@
       <div><a href="/">Dashboard</a> · <strong>Admin</strong></div>
       <div>
         <button onclick="doPull()">Git Pull</button>
-        <button onclick="doRestart()">Request Restart</button>
       </div>
     </header>
     <div class="container">
       <div class="card">
-        <h3>Environment</h3>
+        <h3>Credentials</h3>
+        <div class="msg">Only API key/secret can be updated here.</div>
         <div id="msg" class="msg"></div>
         <form id="envForm" onsubmit="return saveEnv(event)">
           <div class="row">
             <div>
-              <label>EXCHANGE</label>
-              <input name="EXCHANGE" value="{{ env['EXCHANGE'] }}" />
-            </div>
-            <div>
-              <label>USE_TESTNET</label>
-              <select name="USE_TESTNET"><option value="false" {{ 'selected' if env['USE_TESTNET']=='false' else '' }}>false</option><option value="true" {{ 'selected' if env['USE_TESTNET']=='true' else '' }}>true</option></select>
-            </div>
-          </div>
-          <div class="row">
-            <div>
               <label>API_KEY</label>
-              <input name="API_KEY" placeholder="keep blank to retain" />
+              <div class="msg">Current: {{ env['API_KEY'] or '(not set)' }}</div>
+              <input name="API_KEY" type="password" value="{{ env['API_KEY'] }}" />
             </div>
             <div>
               <label>API_SECRET</label>
-              <input name="API_SECRET" placeholder="keep blank to retain" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>TIMEFRAME</label>
-              <input name="TIMEFRAME" value="{{ env['TIMEFRAME'] }}" />
-            </div>
-            <div>
-              <label>HTF_TIMEFRAME</label>
-              <input name="HTF_TIMEFRAME" value="{{ env['HTF_TIMEFRAME'] }}" />
-            </div>
-          </div>
-          <div>
-            <label>UNIVERSE_SYMBOLS (comma separated)</label>
-            <input name="UNIVERSE_SYMBOLS" value="{{ env['UNIVERSE_SYMBOLS'] }}" />
-          </div>
-          <div class="row">
-            <div>
-              <label>UNIVERSE_SIZE</label>
-              <input name="UNIVERSE_SIZE" value="{{ env['UNIVERSE_SIZE'] or '12' }}" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>MAX_POSITIONS</label>
-              <input name="MAX_POSITIONS" value="{{ env['MAX_POSITIONS'] }}" />
-            </div>
-            <div>
-              <label>LEVERAGE</label>
-              <input name="LEVERAGE" value="{{ env['LEVERAGE'] }}" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>MARGIN_MODE</label>
-              <input name="MARGIN_MODE" value="{{ env['MARGIN_MODE'] }}" />
-            </div>
-            <div>
-              <label>ENTRY_SLIPPAGE_MAX_PCT</label>
-              <input name="ENTRY_SLIPPAGE_MAX_PCT" value="{{ env['ENTRY_SLIPPAGE_MAX_PCT'] }}" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>ATR_MULT_SL</label>
-              <input name="ATR_MULT_SL" value="{{ env['ATR_MULT_SL'] }}" />
-            </div>
-            <div>
-              <label>TP_R_MULT</label>
-              <input name="TP_R_MULT" value="{{ env['TP_R_MULT'] }}" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>POLL_SECONDS</label>
-              <input name="POLL_SECONDS" value="{{ env['POLL_SECONDS'] }}" />
-            </div>
-            <div>
-              <label>ENABLE_WEB</label>
-              <select name="ENABLE_WEB"><option value="true" {{ 'selected' if env['ENABLE_WEB']=='true' else '' }}>true</option><option value="false" {{ 'selected' if env['ENABLE_WEB']=='false' else '' }}>false</option></select>
+              <div class="msg">Current: {{ env['API_SECRET'] or '(not set)' }}</div>
+              <input name="API_SECRET" type="password" value="{{ env['API_SECRET'] }}" />
             </div>
           </div>
           <button type="submit">Save .env</button>
         </form>
       </div>
       <div class="card">
+        <h3>Universe</h3>
+        <div class="msg">Adjust the number of symbols scanned.</div>
+        <form id="uniForm" onsubmit="return saveUniverse(event)">
+          <label>UNIVERSE_SIZE</label>
+          <input name="UNIVERSE_SIZE" placeholder="e.g., 12" value="{{ env['UNIVERSE_SIZE'] or '' }}" />
+          <button type="submit">Save</button>
+        </form>
+      </div>
+      <div class="card">
         <h3>Actions</h3>
         <button onclick="doPull()">Git Pull</button>
-        <button onclick="doRestart()">Request Restart</button>
         <div id="actionOut"></div>
       </div>
     </div>
@@ -127,8 +67,9 @@
         e.preventDefault();
         const form = document.getElementById('envForm');
         const data = Object.fromEntries(new FormData(form).entries());
-        // Keep API secrets if left blank
-        if(!data.API_KEY) delete data.API_KEY; if(!data.API_SECRET) delete data.API_SECRET;
+        // Strip masked placeholders to avoid overwriting
+        if(data.API_KEY && data.API_KEY.startsWith('***')) delete data.API_KEY;
+        if(data.API_SECRET && data.API_SECRET.startsWith('***')) delete data.API_SECRET;
         const r = await fetch('/api/env', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) });
         const j = await r.json();
         document.getElementById('msg').textContent = j.ok ? 'Saved .env' : ('Failed: '+(j.error||''));
@@ -138,9 +79,15 @@
         const r = await fetch('/api/git_pull', { method:'POST' }); const j = await r.json();
         const el = document.getElementById('actionOut'); el.innerHTML = '<pre>'+JSON.stringify(j, null, 2)+'</pre>';
       }
-      async function doRestart(){
-        const r = await fetch('/api/restart', { method:'POST' }); const j = await r.json();
-        const el = document.getElementById('actionOut'); el.textContent = j.ok ? 'Restart requested' : ('Failed: '+(j.error||''));
+      
+      async function saveUniverse(e){
+        e.preventDefault();
+        const form = document.getElementById('uniForm');
+        const data = Object.fromEntries(new FormData(form).entries());
+        const r = await fetch('/api/env', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ UNIVERSE_SIZE: data.UNIVERSE_SIZE }) });
+        const j = await r.json();
+        document.getElementById('msg').textContent = j.ok ? 'Saved UNIVERSE_SIZE' : ('Failed: '+(j.error||''));
+        return false;
       }
     </script>
   </body>
