@@ -14,6 +14,9 @@ TIMEFRAME     = os.getenv("TIMEFRAME", "15m")     # lower timeframe (LTF)
 HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")  # higher timeframe (HTF) for confirmation
 
 UNIVERSE_SIZE = int(os.getenv("UNIVERSE_SIZE", "12"))
+# Optional static universe override (comma-separated symbols, e.g., "BTC/USDT:USDT,ETH/USDT:USDT")
+_UNIV_STR = os.getenv("UNIVERSE_SYMBOLS", "").strip()
+UNIVERSE_SYMBOLS = [s.strip() for s in _UNIV_STR.split(",") if s.strip()] if _UNIV_STR else []
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "1"))
 
 # === Risk Management ===
@@ -37,12 +40,9 @@ RSI_SHORT_MAX= float(os.getenv("RSI_SHORT_MAX", "48"))
 ADX_PERIOD   = int(os.getenv("ADX_PERIOD", "14"))
 MIN_ADX      = float(os.getenv("MIN_ADX", "18"))
 
-# SL/TP & trailing
+# SL/TP (no trailing)
 ATR_MULT_SL       = float(os.getenv("ATR_MULT_SL", "2.0"))
 TP_R_MULT         = float(os.getenv("TP_R_MULT", "2.0"))
-BREAKEVEN_AFTER_R = float(os.getenv("BREAKEVEN_AFTER_R", "1.0"))
-TRAIL_AFTER_R     = float(os.getenv("TRAIL_AFTER_R", "1.5"))
-TRAIL_ATR_MULT    = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
 MAX_SL_PCT        = float(os.getenv("MAX_SL_PCT", "0"))  # 0 disables; e.g., 0.02 means max 2% distance
 WORKING_TYPE      = os.getenv("WORKING_TYPE", "MARK_PRICE")  # MARK_PRICE or CONTRACT_PRICE
 PRICE_PROTECT     = os.getenv("PRICE_PROTECT", "false").lower() == "true"
@@ -64,7 +64,6 @@ ORPHAN_SWEEP_GRACE_SECONDS = int(os.getenv("ORPHAN_SWEEP_GRACE_SECONDS", "60"))
 PROTECTION_CHECK_SECONDS = int(os.getenv("PROTECTION_CHECK_SECONDS", "7"))
 USE_FLIP_EXIT = os.getenv("USE_FLIP_EXIT", "false").lower() == "true"
 FLIP_CONFIRM_BARS = int(os.getenv("FLIP_CONFIRM_BARS", "2"))
-USE_TRAILING = os.getenv("USE_TRAILING", "false").lower() == "true"
 TOTAL_NOTIONAL_CAP_FRACTION = float(os.getenv("TOTAL_NOTIONAL_CAP_FRACTION", "0.50"))
 
 # Convenience accessor for external tools (e.g., backtests)
@@ -77,6 +76,7 @@ def get_config():
         "TIMEFRAME": TIMEFRAME,
         "HTF_TIMEFRAME": HTF_TIMEFRAME,
         "UNIVERSE_SIZE": UNIVERSE_SIZE,
+        "UNIVERSE_SYMBOLS": UNIVERSE_SYMBOLS,
         "MAX_POSITIONS": MAX_POSITIONS,
         "ACCOUNT_EQUITY_USDT": ACCOUNT_EQUITY_USDT,
         "RISK_PER_TRADE": RISK_PER_TRADE,
@@ -95,9 +95,6 @@ def get_config():
         "MIN_ADX": MIN_ADX,
         "ATR_MULT_SL": ATR_MULT_SL,
         "TP_R_MULT": TP_R_MULT,
-        "BREAKEVEN_AFTER_R": BREAKEVEN_AFTER_R,
-        "TRAIL_AFTER_R": TRAIL_AFTER_R,
-        "TRAIL_ATR_MULT": TRAIL_ATR_MULT,
         "MAX_SL_PCT": MAX_SL_PCT,
         "STOP_CAP_BEHAVIOR": STOP_CAP_BEHAVIOR,
         "WORKING_TYPE": WORKING_TYPE,
@@ -113,11 +110,10 @@ def get_config():
         "PROTECTION_CHECK_SECONDS": PROTECTION_CHECK_SECONDS,
         "USE_FLIP_EXIT": USE_FLIP_EXIT,
         "FLIP_CONFIRM_BARS": FLIP_CONFIRM_BARS,
-        "USE_TRAILING": USE_TRAILING,
         "TOTAL_NOTIONAL_CAP_FRACTION": TOTAL_NOTIONAL_CAP_FRACTION,
     }
 
 # Web UI
-ENABLE_WEB = os.getenv("ENABLE_WEB", "false").lower() == "true"
+ENABLE_WEB = os.getenv("ENABLE_WEB", "true").lower() == "true"
 WEB_HOST   = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT   = int(os.getenv("WEB_PORT", "8080"))

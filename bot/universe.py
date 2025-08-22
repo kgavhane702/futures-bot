@@ -1,4 +1,8 @@
+from .config import UNIVERSE_SYMBOLS
+
 def top_usdt_perps(ex, n=12):
+    if UNIVERSE_SYMBOLS:
+        return UNIVERSE_SYMBOLS
     ex.load_markets()
     symbols = []
     for s, m in ex.markets.items():

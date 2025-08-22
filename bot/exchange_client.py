@@ -19,13 +19,14 @@ def get_exchange():
         log("Sandbox mode:", USE_TESTNET)
     except Exception:
         pass
-    # Enforce position mode according to HEDGE_MODE if supported
-    try:
-        if hasattr(ex, "set_position_mode"):
-            ex.set_position_mode(hedged=HEDGE_MODE)
-            log("set_position_mode ok", HEDGE_MODE)
-    except Exception as e:
-        log("set_position_mode failed", str(e))
+    # Only attempt to change position mode if hedge mode requested
+    if HEDGE_MODE:
+        try:
+            if hasattr(ex, "set_position_mode"):
+                ex.set_position_mode(hedged=True)
+                log("set_position_mode ok", True)
+        except Exception as e:
+            log("set_position_mode failed", EXCHANGE_ID, str(e))
     return ex
 
 def ensure_symbol_config(ex, symbol):

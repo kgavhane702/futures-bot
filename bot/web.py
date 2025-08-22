@@ -1,11 +1,11 @@
 import threading
 from datetime import datetime, UTC
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 
 from .config import WEB_HOST, WEB_PORT
 from .logging_utils import log
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="webapp/templates")
 
 state = {
     "universe": [],
@@ -28,94 +28,15 @@ def api_state():
 
 @app.get("/")
 def index():
-    return (
-        """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Futures Bot Monitor</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>
-      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b1020; color: #e6e8f0; }
-      header { padding: 16px; background: #0e1630; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #1b2545; }
-      h1 { margin: 0; font-size: 18px; }
-      .container { padding: 16px; }
-      .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
-      @media (min-width: 900px) { .grid { grid-template-columns: 1.5fr 1fr; } }
-      .card { background: #111936; border: 1px solid #1b2545; border-radius: 12px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
-      .title { font-weight: 700; margin-bottom: 8px; font-size: 14px; }
-      table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      th, td { padding: 8px 6px; border-bottom: 1px solid #1b2545; }
-      th { text-align: left; color: #a8b3cf; font-weight: 600; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-      .pill-long { background: #103f2b; color: #4fe3a1; }
-      .pill-short { background: #3f1026; color: #ff7aa8; }
-      .muted { color: #a8b3cf; }
-    </style>
-  </head>
-  <body>
-    <header><h1>Futures Bot Monitor</h1></header>
-    <div class="container">
-      <div class="grid">
-        <div class="card">
-          <div class="title">Open Positions</div>
-          <table id="positions"><thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th></tr></thead><tbody></tbody></table>
-        </div>
-        <div class="card">
-          <div class="title">Signals (last)</div>
-          <table id="signals"><thead><tr><th>Symbol</th><th>Side</th><th>Score</th></tr></thead><tbody></tbody></table>
-        </div>
-        <div class="card">
-          <div class="title">Universe & Status</div>
-          <div class="muted">Universe: <span id="universe"></span></div>
-          <div class="muted">Last candle close: <span id="last_candle_time"></span></div>
-          <div class="muted">Sweeper: <span id="sweep"></span></div>
-          <div class="muted">Server time: <span id="server_time"></span></div>
-        </div>
-      </div>
-    </div>
-    <script>
-      async function refresh(){
-        try {
-          const r = await fetch('/api/state');
-          const j = await r.json();
-          document.getElementById('universe').textContent = (j.universe || []).join(', ');
-          document.getElementById('last_candle_time').textContent = j.last_candle_time || '-';
-          document.getElementById('server_time').textContent = j.server_time || '-';
-          const sw = j.sweep_stats || {}; document.getElementById('sweep').textContent = `canceled: ${sw.last_canceled||0} @ ${sw.ts||'-'}`;
+    return render_template("dashboard.html")
 
-          const posT = document.querySelector('#positions tbody'); posT.innerHTML = '';
-          const pos = j.positions || {};
-          for (const sym of Object.keys(pos)){
-            const list = Array.isArray(pos[sym]) ? pos[sym] : [pos[sym]];
-            for (const p of list){
-              const tr = document.createElement('tr');
-              const sidePill = `<span class="pill ${p.side==='long'?'pill-long':'pill-short'}">${p.side}</span>`;
-              tr.innerHTML = `<td>${sym}</td><td>${sidePill}</td><td>${p.size||0}</td><td>${p.entry||'-'}</td>`;
-              posT.appendChild(tr);
-            }
-          }
+@app.get("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
 
-          const sigT = document.querySelector('#signals tbody'); sigT.innerHTML = '';
-          for (const s of (j.signals || [])){
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${s[0]}</td><td>${s[1]}</td><td>${(s[4]||0).toFixed? s[4].toFixed(2): s[4]}</td>`;
-            sigT.appendChild(tr);
-          }
-        } catch(e) {}
-      }
-      refresh(); setInterval(refresh, 4000);
-    </script>
-  </body>
- </html>
-        """,
-        200,
-        {"Content-Type": "text/html; charset=utf-8"},
-    )
+@app.get("/ui")
+def ui():
+    return render_template("dashboard.html")
 
 def start_web_server():
     log("Starting web server on", WEB_HOST, WEB_PORT)

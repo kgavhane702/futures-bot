@@ -5,8 +5,8 @@ import ccxt
 
 from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      ATR_MULT_SL, TP_R_MULT, POLL_SECONDS, TRADES_CSV, DRY_RUN,
-                     BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
-                     PROTECTION_CHECK_SECONDS, USE_FLIP_EXIT, FLIP_CONFIRM_BARS, USE_TRAILING, ENTRY_SLIPPAGE_MAX_PCT, TOTAL_NOTIONAL_CAP_FRACTION, LEVERAGE)
+                     ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
+                     PROTECTION_CHECK_SECONDS, ENTRY_SLIPPAGE_MAX_PCT, TOTAL_NOTIONAL_CAP_FRACTION, LEVERAGE)
 from .logging_utils import log
 try:
     from .web import start_web_server, update_state
@@ -21,8 +21,7 @@ from .indicators import fetch_ohlcv_df, add_indicators, valid_row
 from .signals import trend_and_signal, score_signal
 from .risk import equity_from_balance, size_position, protective_prices
 from .orders import (get_open_positions, get_open_orders, cancel_reduce_only_orders, place_bracket_orders,
-                     maybe_update_trailing, reconcile_orphan_reduce_only_orders,
-                     ensure_protection_orders)
+                     reconcile_orphan_reduce_only_orders)
 
 def write_trade(row):
     header = not os.path.exists(TRADES_CSV)
@@ -34,73 +33,7 @@ def main():
     last_candle_time = None
     last_orphan_sweep_ts = 0
 
-    # Background orphan-order sweeper thread
-    def orphan_sweeper():
-        while True:
-            try:
-                sweep_canceled = 0
-                open_pos_bg = get_open_positions(ex)
-                open_syms_bg = set(open_pos_bg.keys())
-                try:
-                    all_markets_bg = list(ex.load_markets().keys())
-                except Exception:
-                    all_markets_bg = []
-                for sym in set(all_markets_bg) | open_syms_bg:
-                    try:
-                        ords = get_open_orders(ex, sym) or []
-                        # Skip protection for very fresh orders to avoid racing entry flow
-                        fresh_cutoff = time.time() * 1000 - (ORPHAN_SWEEP_GRACE_SECONDS * 1000)
-                        ords_keep = []
-                        for o in ords:
-                            try:
-                                ts = (o.get("timestamp") or (o.get("info", {}) or {}).get("time"))
-                                if ts and ts >= fresh_cutoff:
-                                    ords_keep.append(o)
-                            except Exception:
-                                pass
-                        before = len(ords)
-                        reconcile_orphan_reduce_only_orders(ex, sym, open_pos_bg.get(sym))
-                        after = len(get_open_orders(ex, sym) or [])
-                        if before and after is not None and after < before:
-                            sweep_canceled += (before - after)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            if sweep_canceled:
-                log("Orphan sweep canceled orders:", sweep_canceled)
-            time.sleep(ORPHAN_SWEEP_SECONDS)
-
-    threading.Thread(target=orphan_sweeper, daemon=True).start()
-
-    # Background protection checker: ensures SL/TP exist for each live position
-    def protection_checker():
-        while True:
-            try:
-                open_pos_pc = get_open_positions(ex)
-                for sym, pos in open_pos_pc.items():
-                    try:
-                        ltf = fetch_ohlcv_df(ex, sym, TIMEFRAME, limit=5)
-                        ltf = add_indicators(ltf)
-                        last = ltf.iloc[-1]
-                        prev = ltf.iloc[-2]
-                        atr = float(prev["atr"]) if not pd.isna(prev["atr"]) else (float(last["atr"]) if not pd.isna(last["atr"]) else 0.0)
-                    except Exception:
-                        atr = 0.0
-                    pos_list = pos if isinstance(pos, list) else [pos]
-                    for p in pos_list:
-                        try:
-                            side = "buy" if p.get("side") == "long" else "sell"
-                            entry_ref = p.get("entry") or float(last.get("close"))
-                            ensure_protection_orders(ex, sym, side, p.get("size", 0.0), entry_ref, atr,
-                                                     ATR_MULT_SL, TP_R_MULT)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            time.sleep(PROTECTION_CHECK_SECONDS)
-
-    threading.Thread(target=protection_checker, daemon=True).start()
+    # No background threads in simplified mode (avoid automatic repairs/sweeps)
 
     # Start web UI if enabled
     try:
@@ -154,21 +87,12 @@ def main():
             log("Open positions:", open_pos)
             update_state(positions=open_pos)
 
-            # Reconcile orphan open orders (no pos -> cancel all orders)
-            # Include any symbols that have open orders even if not in universe
-            try:
-                all_markets = list(ex.load_markets().keys())
-            except Exception:
-                all_markets = list(set(universe))
-            for sym in set(universe) | open_syms | set(all_markets):
+            # Simplified orphan logic: only when flat cancel reduceOnly for that symbol
+            for sym in open_syms:
                 try:
-                    has_orders = bool(get_open_orders(ex, sym))
+                    reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym), grace_cutoff_ms=None)
                 except Exception:
-                    has_orders = False
-                if has_orders or (sym in open_syms) or (sym in universe):
-                    # Pass grace cutoff for fresh orders to avoid canceling brand-new protections
-                    fresh_cutoff = time.time() * 1000 - (ORPHAN_SWEEP_GRACE_SECONDS * 1000)
-                    reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym), grace_cutoff_ms=fresh_cutoff)
+                    pass
 
             # Scan signals
             cands = []
@@ -248,6 +172,11 @@ def main():
                     pass
 
                 try:
+                    # Clear existing reduceOnly orders before placing a fresh bracket (older flow)
+                    try:
+                        cancel_reduce_only_orders(ex, sym)
+                    except Exception:
+                        pass
                     place_bracket_orders(ex, sym, side_ex, qty, entry_price, stop, tp)
                     write_trade({
                         "time": datetime.now(UTC).isoformat(),
@@ -267,7 +196,7 @@ def main():
                 except Exception as e:
                     log("Order flow error:", sym, str(e))
 
-            # Manage open positions (coarse trailing / flip exits)
+            # Manage open positions (no auto-repair/trailing)
             current_pos = get_open_positions(ex)
             for sym, pos in current_pos.items():
                 try:
@@ -288,50 +217,8 @@ def main():
                         atr_last = None
                     atr_for_prot = atr_prev if (atr_prev is not None and atr_prev > 0) else (atr_last if (atr_last is not None and atr_last > 0) else 0.0)
                     for p in pos_list:
-                        side = "buy" if p["side"]=="long" else "sell"
-                        # Reference entry for protection/trailing
-                        entry_ref = p.get("entry") or (prev["close"] if not pd.isna(prev["close"]) else last["close"])
-                        # Ensure SL/TP exist if user cancelled them on exchange (run regardless of prev validity)
-                        ensure_protection_orders(ex, sym, side, p["size"], entry_ref, atr_for_prot,
-                                                 ATR_MULT_SL, TP_R_MULT)
-                        # Trail / BE only when indicators are valid and enabled
-                        if USE_TRAILING and valid_row(prev):
-                            maybe_update_trailing(ex, sym, side, p["size"], entry_ref, float(prev["atr"]), last["close"],
-                                                  ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
-                    # Flip exit requires N-bar confirmation and must be enabled
-                    if USE_FLIP_EXIT:
-                        try:
-                            n = max(1, int(FLIP_CONFIRM_BARS))
-                        except Exception:
-                            n = 2
-                        tr_seq = ["up" if ltf.iloc[-k]["ema_fast"] > ltf.iloc[-k]["ema_slow"] else "down" for k in range(1, n+1)]
-                        flip_against_long = all(t == "down" for t in tr_seq)
-                        flip_against_short = all(t == "up" for t in tr_seq)
-                        if isinstance(pos, dict):
-                            if pos["side"] == "long" and flip_against_long:
-                                log("Flip out of long — closing", sym)
-                                if not DRY_RUN:
-                                    try:
-                                        ex.create_order(sym, "market", "sell", pos["size"], params={"reduceOnly": True})
-                                    except Exception:
-                                        try:
-                                            ex.create_order(sym, "market", "sell", None, params={"reduceOnly": True, "closePosition": True})
-                                        except Exception:
-                                            pass
-                                else:
-                                    log("[DRY_RUN] close long", sym)
-                            elif pos["side"] == "short" and flip_against_short:
-                                log("Flip out of short — closing", sym)
-                                if not DRY_RUN:
-                                    try:
-                                        ex.create_order(sym, "market", "buy", pos["size"], params={"reduceOnly": True})
-                                    except Exception:
-                                        try:
-                                            ex.create_order(sym, "market", "buy", None, params={"reduceOnly": True, "closePosition": True})
-                                        except Exception:
-                                            pass
-                                else:
-                                    log("[DRY_RUN] close short", sym)
+                        # Simplified: do nothing here; rely on initial protections only
+                        pass
                 except Exception as e:
                     log("manage fail", sym, str(e))
 
