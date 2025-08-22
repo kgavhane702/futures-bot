@@ -12,8 +12,9 @@ from .universe import top_usdt_perps
 from .indicators import fetch_ohlcv_df, add_indicators, valid_row
 from .signals import trend_and_signal, score_signal
 from .risk import equity_from_balance, size_position, protective_prices
-from .orders import (get_open_positions, cancel_reduce_only_orders, place_bracket_orders,
-                     maybe_update_trailing, reconcile_orphan_reduce_only_orders)
+from .orders import (get_open_positions, get_open_orders, cancel_reduce_only_orders, place_bracket_orders,
+                     maybe_update_trailing, reconcile_orphan_reduce_only_orders,
+                     ensure_protection_orders)
 
 def write_trade(row):
     header = not os.path.exists(TRADES_CSV)
@@ -46,9 +47,19 @@ def main():
             open_syms = set(open_pos.keys())
             log("Open positions:", open_pos)
 
-            # Reconcile orphan reduceOnly orders (no pos -> cancel RO)
-            for sym in set(universe) | open_syms:
-                reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym))
+            # Reconcile orphan open orders (no pos -> cancel all orders)
+            # Include any symbols that have open orders even if not in universe
+            try:
+                all_markets = list(ex.load_markets().keys())
+            except Exception:
+                all_markets = list(set(universe))
+            for sym in set(universe) | open_syms | set(all_markets):
+                try:
+                    has_orders = bool(get_open_orders(ex, sym))
+                except Exception:
+                    has_orders = False
+                if has_orders or (sym in open_syms) or (sym in universe):
+                    reconcile_orphan_reduce_only_orders(ex, sym, open_pos.get(sym))
 
             # Scan signals
             cands = []
@@ -122,15 +133,29 @@ def main():
                     ltf = add_indicators(ltf)
                     last = ltf.iloc[-1]
                     prev = ltf.iloc[-2]
-                    if not valid_row(prev):
-                        continue
                     # Support hedge mode: pos can be dict or list of dicts
                     pos_list = pos if isinstance(pos, list) else [pos]
+                    # Compute robust ATR for protection even if prev row is invalid
+                    try:
+                        atr_prev = float(prev["atr"]) if not pd.isna(prev["atr"]) else None
+                    except Exception:
+                        atr_prev = None
+                    try:
+                        atr_last = float(last["atr"]) if not pd.isna(last["atr"]) else None
+                    except Exception:
+                        atr_last = None
+                    atr_for_prot = atr_prev if (atr_prev is not None and atr_prev > 0) else (atr_last if (atr_last is not None and atr_last > 0) else 0.0)
                     for p in pos_list:
                         side = "buy" if p["side"]=="long" else "sell"
-                        # Trail / BE
-                        entry_for_trailing = p.get("entry") or prev["close"]
-                        maybe_update_trailing(ex, sym, side, p["size"], entry_for_trailing, prev["atr"], last["close"],
+                        # Reference entry for protection/trailing
+                        entry_ref = p.get("entry") or (prev["close"] if not pd.isna(prev["close"]) else last["close"])
+                        # Ensure SL/TP exist if user cancelled them on exchange (run regardless of prev validity)
+                        ensure_protection_orders(ex, sym, side, p["size"], entry_ref, atr_for_prot,
+                                                 ATR_MULT_SL, TP_R_MULT)
+                        # Trail / BE only when indicators are valid
+                        if not valid_row(prev):
+                            continue
+                        maybe_update_trailing(ex, sym, side, p["size"], entry_ref, float(prev["atr"]), last["close"],
                                               ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
                     # Flip exit on EMA cross
                     tr = "up" if prev["ema_fast"] > prev["ema_slow"] else "down"

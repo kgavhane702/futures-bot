@@ -1,6 +1,7 @@
 from .config import DRY_RUN, MIN_NOTIONAL_USDT, HEDGE_MODE
 from .logging_utils import log
 from .exchange_client import round_amount, round_price, new_client_id
+from .risk import protective_prices
 
 def get_open_positions(ex):
     try:
@@ -68,6 +69,8 @@ def cancel_reduce_only_orders(ex, symbol):
 
 def _is_take_profit(o) -> bool:
     try:
+        if not o.get("reduceOnly"):
+            return False
         t = (o.get("type") or "").upper()
         it = (o.get("info", {}) or {}).get("type", "").upper()
         return ("TAKE_PROFIT" in t) or ("TAKE_PROFIT" in it)
@@ -133,6 +136,65 @@ def get_current_stop_loss_price(ex, symbol, *, position_side: str | None = None)
     except Exception:
         return None
 
+def _matches_position_side(o, position_side: str | None) -> bool:
+    if not position_side:
+        return True
+    ps = ((o.get("params", {}) or {}).get("positionSide")
+          or (o.get("info", {}) or {}).get("positionSide"))
+    return (ps is None) or (str(ps).upper() == position_side.upper())
+
+def has_stop_loss(ex, symbol, *, position_side: str | None = None) -> bool:
+    try:
+        for o in get_open_orders(ex, symbol):
+            if _is_stop_loss(o) and _matches_position_side(o, position_side):
+                return True
+    except Exception:
+        pass
+    return False
+
+def has_take_profit(ex, symbol, *, position_side: str | None = None) -> bool:
+    try:
+        for o in get_open_orders(ex, symbol):
+            if _is_take_profit(o) and _matches_position_side(o, position_side):
+                return True
+    except Exception:
+        pass
+    return False
+
+def ensure_protection_orders(ex, symbol, side, qty, entry, atr,
+                             ATR_MULT_SL, TP_R_MULT):
+    if DRY_RUN:
+        return
+    try:
+        position_side = "LONG" if side == "buy" else "SHORT" if HEDGE_MODE else None
+        # Compute desired protective levels
+        stop, tp, _ = protective_prices(side, float(entry), float(atr), ATR_MULT_SL, TP_R_MULT)
+        stop = round_price(ex, symbol, stop)
+        tp = round_price(ex, symbol, tp)
+
+        need_sl = not has_stop_loss(ex, symbol, position_side=position_side)
+        need_tp = not has_take_profit(ex, symbol, position_side=position_side)
+        if not (need_sl or need_tp):
+            return
+
+        opposite = "sell" if side == "buy" else "buy"
+        params = {"reduceOnly": True}
+        if HEDGE_MODE and position_side:
+            params["positionSide"] = position_side
+
+        if need_sl:
+            ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
+                            params={**params, "newClientOrderId": new_client_id("reprot_sl"),
+                                    "stopPrice": float(stop)})
+            log("Recreated SL", symbol, stop)
+        if need_tp:
+            ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
+                            params={**params, "newClientOrderId": new_client_id("reprot_tp"),
+                                    "stopPrice": float(tp)})
+            log("Recreated TP", symbol, tp)
+    except Exception as e:
+        log("ensure_protection_orders failed", symbol, str(e))
+
 def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
     try:
         open_orders = get_open_orders(ex, symbol)
@@ -141,11 +203,12 @@ def reconcile_orphan_reduce_only_orders(ex, symbol, pos):
             pos_size = sum(float(p.get("size", 0.0) or 0.0) for p in pos)
         else:
             pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
-        if pos_size <= 0 and reduce_only:
-            for o in reduce_only:
+        # If no position at all, cancel ALL open orders (reduceOnly and non-reduceOnly)
+        if pos_size <= 0 and open_orders:
+            for o in open_orders:
                 try:
                     ex.cancel_order(o["id"], symbol)
-                    log(f"Canceled orphan reduceOnly order {o['id']} on {symbol}")
+                    log(f"Canceled orphan order {o.get('id')} on {symbol}")
                 except Exception as e:
                     log(f"Failed to cancel orphan order {o.get('id')} on {symbol}: {e}")
     except Exception as e:
