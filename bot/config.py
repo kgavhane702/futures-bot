@@ -47,6 +47,10 @@ MAX_SL_PCT        = float(os.getenv("MAX_SL_PCT", "0"))  # 0 disables; e.g., 0.0
 WORKING_TYPE      = os.getenv("WORKING_TYPE", "MARK_PRICE")  # MARK_PRICE or CONTRACT_PRICE
 PRICE_PROTECT     = os.getenv("PRICE_PROTECT", "false").lower() == "true"
 STOP_CAP_BEHAVIOR = os.getenv("STOP_CAP_BEHAVIOR", "clamp").lower()  # 'clamp' or 'skip'
+PROTECTION_BUFFER_PCT = float(os.getenv("PROTECTION_BUFFER_PCT", "0.001"))  # 0.1% default
+PROTECTION_COOLDOWN_SECS = int(os.getenv("PROTECTION_COOLDOWN_SECS", "10"))
+PROTECTION_TOLERANCE_PCT = float(os.getenv("PROTECTION_TOLERANCE_PCT", "0.001"))
+ENTRY_PROTECTION_GRACE_SECS = int(os.getenv("ENTRY_PROTECTION_GRACE_SECS", "5"))
 
 # Ops
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))

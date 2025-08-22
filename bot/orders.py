@@ -1,6 +1,7 @@
-from .config import DRY_RUN, MIN_NOTIONAL_USDT, HEDGE_MODE, WORKING_TYPE, PRICE_PROTECT
+from .config import DRY_RUN, MIN_NOTIONAL_USDT, HEDGE_MODE, WORKING_TYPE, PRICE_PROTECT, PROTECTION_BUFFER_PCT, PROTECTION_COOLDOWN_SECS, PROTECTION_TOLERANCE_PCT
+import time
 from .logging_utils import log
-from .exchange_client import round_amount, round_price, new_client_id
+from .exchange_client import round_amount, round_price, new_client_id, get_price_increment
 from .risk import protective_prices
 
 def get_open_positions(ex):
@@ -133,6 +134,9 @@ def get_current_stop_loss_price(ex, symbol, *, position_side: str | None = None)
     except Exception:
         return None
 
+# track last protection update per symbol
+_last_prot_ts = {}
+
 def _matches_position_side(o, position_side: str | None) -> bool:
     if not position_side:
         return True
@@ -158,39 +162,107 @@ def has_take_profit(ex, symbol, *, position_side: str | None = None) -> bool:
         pass
     return False
 
+def is_within_tolerance(current: float, target: float, tol_frac: float) -> bool:
+    try:
+        if current is None or target is None:
+            return False
+        return abs(current - target) / max(1e-9, abs(target)) <= tol_frac
+    except Exception:
+        return False
+
 def ensure_protection_orders(ex, symbol, side, qty, entry, atr,
                              ATR_MULT_SL, TP_R_MULT):
     if DRY_RUN:
         return
     try:
+        # Throttle protection recreation per symbol to avoid order spam
+        now_ms = int(time.time() * 1000)
+        last_ts = _last_prot_ts.get(symbol)
+        if last_ts and (now_ms - last_ts) < (PROTECTION_COOLDOWN_SECS * 1000):
+            return
         position_side = "LONG" if side == "buy" else "SHORT" if HEDGE_MODE else None
         # Compute desired protective levels
         stop, tp, _ = protective_prices(side, float(entry), float(atr), ATR_MULT_SL, TP_R_MULT)
-        stop = round_price(ex, symbol, stop)
-        tp = round_price(ex, symbol, tp)
+        # Apply minimum offset to avoid immediate trigger (one tick beyond trigger)
+        tick = get_price_increment(ex, symbol)
+        if side == "buy":
+            # move slightly away from entry and round
+            stop = min(stop, float(entry) * (1 - PROTECTION_BUFFER_PCT))
+            tp   = max(tp,   float(entry) * (1 + PROTECTION_BUFFER_PCT))
+            stop = round_price(ex, symbol, min(stop, float(entry) - tick))
+            tp   = round_price(ex, symbol, max(tp,   float(entry) + tick))
+        else:
+            stop = max(stop, float(entry) * (1 + PROTECTION_BUFFER_PCT))
+            tp   = min(tp,   float(entry) * (1 - PROTECTION_BUFFER_PCT))
+            stop = round_price(ex, symbol, max(stop, float(entry) + tick))
+            tp   = round_price(ex, symbol, min(tp,   float(entry) - tick))
 
-        need_sl = not has_stop_loss(ex, symbol, position_side=position_side)
-        need_tp = not has_take_profit(ex, symbol, position_side=position_side)
+        # Check existing protections and tolerance
+        sl_range = get_current_stop_loss_price(ex, symbol, position_side=position_side)
+        has_sl_now = has_stop_loss(ex, symbol, position_side=position_side)
+        need_sl = not has_sl_now or (sl_range and not is_within_tolerance(sl_range[0] if side=="sell" else sl_range[1], stop, PROTECTION_TOLERANCE_PCT))
+
+        # Approx TP detection: reuse _is_take_profit
+        has_tp_now = has_take_profit(ex, symbol, position_side=position_side)
+        need_tp = not has_tp_now  # we won't try to replace TP if one exists (avoid churn)
         if not (need_sl or need_tp):
             return
 
         opposite = "sell" if side == "buy" else "buy"
-        params = {"reduceOnly": True}
+        params = {"reduceOnly": True, "closePosition": True}
         if HEDGE_MODE and position_side:
             params["positionSide"] = position_side
 
+        made_any = False
         if need_sl:
-            ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
-                            params={**params, "newClientOrderId": new_client_id("reprot_sl"),
-                                    "stopPrice": float(stop),
-                                    "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
-            log("Recreated SL", symbol, stop)
+            try:
+                ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
+                                params={**params, "newClientOrderId": new_client_id("reprot_sl"),
+                                        "stopPrice": float(stop),
+                                        "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                log("Recreated SL", symbol, stop)
+                made_any = True
+            except Exception as e:
+                # Retry once with extra tick buffer
+                try:
+                    adj = tick * 2
+                    if side == "buy":
+                        stop2 = round_price(ex, symbol, float(stop) - adj)
+                    else:
+                        stop2 = round_price(ex, symbol, float(stop) + adj)
+                    ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
+                                    params={**params, "newClientOrderId": new_client_id("reprot_sl2"),
+                                            "stopPrice": float(stop2),
+                                            "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                    log("Recreated SL (retry)", symbol, stop2)
+                    made_any = True
+                except Exception:
+                    raise
         if need_tp:
-            ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
-                            params={**params, "newClientOrderId": new_client_id("reprot_tp"),
-                                    "stopPrice": float(tp),
-                                    "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
-            log("Recreated TP", symbol, tp)
+            try:
+                ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
+                                params={**params, "newClientOrderId": new_client_id("reprot_tp"),
+                                        "stopPrice": float(tp),
+                                        "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                log("Recreated TP", symbol, tp)
+                made_any = True
+            except Exception as e:
+                try:
+                    adj = tick * 2
+                    if side == "buy":
+                        tp2 = round_price(ex, symbol, float(tp) + adj)
+                    else:
+                        tp2 = round_price(ex, symbol, float(tp) - adj)
+                    ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
+                                    params={**params, "newClientOrderId": new_client_id("reprot_tp2"),
+                                            "stopPrice": float(tp2),
+                                            "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                    log("Recreated TP (retry)", symbol, tp2)
+                    made_any = True
+                except Exception:
+                    raise
+        if made_any:
+            _last_prot_ts[symbol] = now_ms
     except Exception as e:
         log("ensure_protection_orders failed", symbol, str(e))
 
@@ -275,7 +347,7 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         raise
 
     # Protective orders
-    params_ro = {"reduceOnly": True}
+    params_ro = {"reduceOnly": True, "closePosition": True}
     if HEDGE_MODE:
         params_ro["positionSide"] = "LONG" if side == "buy" else "SHORT"
 
@@ -310,6 +382,11 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
             log("Emergency close FAILED", symbol, str(e))
         raise RuntimeError("SL placement failed; entry closed/attempted close.")
     # If only TP failed, keep the position open with SL and allow protection checker to recreate TP.
+    try:
+        from .config import ENTRY_PROTECTION_GRACE_SECS
+        _last_prot_ts[symbol] = int(time.time() * 1000) + ENTRY_PROTECTION_GRACE_SECS * 1000
+    except Exception:
+        _last_prot_ts[symbol] = int(time.time() * 1000) + 5000
 
     return entry
 

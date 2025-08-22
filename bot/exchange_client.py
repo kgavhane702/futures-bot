@@ -64,3 +64,25 @@ def round_price(ex, symbol, price: float) -> float:
 def new_client_id(prefix="bot"):
     suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
     return f"{prefix}_{int(time.time()*1000)}_{suffix}"
+
+def get_price_increment(ex, symbol) -> float:
+    try:
+        m = ex.market(symbol)
+        # Try filters (Binance-like)
+        flt = (m.get("info", {}) or {}).get("filters", [])
+        for f in flt:
+            if f.get("filterType") == "PRICE_FILTER":
+                ts = f.get("tickSize")
+                if ts:
+                    return float(ts)
+        # Try precision -> derive increment
+        prec = (m.get("precision", {}) or {}).get("price")
+        if prec is not None:
+            return 10 ** (-int(prec))
+        # Try limits
+        inc = (m.get("limits", {}) or {}).get("price", {}).get("min")
+        if inc:
+            return float(inc)
+    except Exception:
+        pass
+    return 1e-6
