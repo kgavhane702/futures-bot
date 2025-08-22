@@ -1,11 +1,11 @@
-import time, traceback, os
+import time, traceback, os, threading
 from datetime import datetime, UTC
 import pandas as pd
 import ccxt
 
 from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      ATR_MULT_SL, TP_R_MULT, POLL_SECONDS, TRADES_CSV, DRY_RUN,
-                     BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
+                     BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS)
 from .logging_utils import log
 from .exchange_client import get_exchange, ensure_symbol_config, round_amount
 from .universe import top_usdt_perps
@@ -24,6 +24,28 @@ def main():
     ex = get_exchange()
     ex.load_markets()
     last_candle_time = None
+    last_orphan_sweep_ts = 0
+
+    # Background orphan-order sweeper thread
+    def orphan_sweeper():
+        while True:
+            try:
+                open_pos_bg = get_open_positions(ex)
+                open_syms_bg = set(open_pos_bg.keys())
+                try:
+                    all_markets_bg = list(ex.load_markets().keys())
+                except Exception:
+                    all_markets_bg = []
+                for sym in set(all_markets_bg) | open_syms_bg:
+                    try:
+                        reconcile_orphan_reduce_only_orders(ex, sym, open_pos_bg.get(sym))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            time.sleep(ORPHAN_SWEEP_SECONDS)
+
+    threading.Thread(target=orphan_sweeper, daemon=True).start()
 
     while True:
         try:
@@ -33,7 +55,26 @@ def main():
             hb_df["ts"] = pd.to_datetime(hb_df["ts"], unit="ms")
             latest_closed_ts = hb_df.iloc[-2]["ts"]
             if last_candle_time == latest_closed_ts:
-                log("waiting for next candle...")
+                # Periodic orphan-order sweep (every ~3 minutes)
+                try:
+                    now_ts = time.time()
+                    if now_ts - last_orphan_sweep_ts >= 180:
+                        log("Orphan sweep while waiting…")
+                        open_pos_wait = get_open_positions(ex)
+                        open_syms_wait = set(open_pos_wait.keys())
+                        try:
+                            all_markets_wait = list(ex.load_markets().keys())
+                        except Exception:
+                            all_markets_wait = []
+                        for sym in set(all_markets_wait) | open_syms_wait:
+                            try:
+                                reconcile_orphan_reduce_only_orders(ex, sym, open_pos_wait.get(sym))
+                            except Exception:
+                                pass
+                        last_orphan_sweep_ts = now_ts
+                except Exception:
+                    pass
+                log("waiting for next candle…")
                 time.sleep(POLL_SECONDS)
                 continue
             last_candle_time = latest_closed_ts
@@ -157,20 +198,37 @@ def main():
                             continue
                         maybe_update_trailing(ex, sym, side, p["size"], entry_ref, float(prev["atr"]), last["close"],
                                               ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
-                    # Flip exit on EMA cross
-                    tr = "up" if prev["ema_fast"] > prev["ema_slow"] else "down"
-                    if pos["side"] == "long" and tr == "down":
-                        log("Flip out of long — closing", sym)
-                        if not DRY_RUN:
-                            ex.create_order(sym, "market", "sell", pos["size"], params={"reduceOnly": True})
-                        else:
-                            log("[DRY_RUN] close long", sym)
-                    elif pos["side"] == "short" and tr == "up":
-                        log("Flip out of short — closing", sym)
-                        if not DRY_RUN:
-                            ex.create_order(sym, "market", "buy", pos["size"], params={"reduceOnly": True})
-                        else:
-                            log("[DRY_RUN] close short", sym)
+                    # Flip exit requires two consecutive EMA bars against position
+                    tr_prev = "up" if prev["ema_fast"] > prev["ema_slow"] else "down"
+                    tr_last = "up" if last["ema_fast"] > last["ema_slow"] else "down"
+                    flip_against_long = (tr_prev == "down" and tr_last == "down")
+                    flip_against_short = (tr_prev == "up" and tr_last == "up")
+                    # In hedge mode, pos might be a list; here we only act on symbol-level when single dict
+                    if isinstance(pos, dict):
+                        if pos["side"] == "long" and flip_against_long:
+                            log("Flip out of long — closing", sym)
+                            if not DRY_RUN:
+                                try:
+                                    ex.create_order(sym, "market", "sell", pos["size"], params={"reduceOnly": True})
+                                except Exception:
+                                    try:
+                                        ex.create_order(sym, "market", "sell", None, params={"reduceOnly": True, "closePosition": True})
+                                    except Exception:
+                                        pass
+                            else:
+                                log("[DRY_RUN] close long", sym)
+                        elif pos["side"] == "short" and flip_against_short:
+                            log("Flip out of short — closing", sym)
+                            if not DRY_RUN:
+                                try:
+                                    ex.create_order(sym, "market", "buy", pos["size"], params={"reduceOnly": True})
+                                except Exception:
+                                    try:
+                                        ex.create_order(sym, "market", "buy", None, params={"reduceOnly": True, "closePosition": True})
+                                    except Exception:
+                                        pass
+                            else:
+                                log("[DRY_RUN] close short", sym)
                 except Exception as e:
                     log("manage fail", sym, str(e))
 

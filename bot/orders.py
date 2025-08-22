@@ -1,4 +1,4 @@
-from .config import DRY_RUN, MIN_NOTIONAL_USDT, HEDGE_MODE
+from .config import DRY_RUN, MIN_NOTIONAL_USDT, HEDGE_MODE, WORKING_TYPE, PRICE_PROTECT
 from .logging_utils import log
 from .exchange_client import round_amount, round_price, new_client_id
 from .risk import protective_prices
@@ -185,12 +185,14 @@ def ensure_protection_orders(ex, symbol, side, qty, entry, atr,
         if need_sl:
             ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
                             params={**params, "newClientOrderId": new_client_id("reprot_sl"),
-                                    "stopPrice": float(stop)})
+                                    "stopPrice": float(stop),
+                                    "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
             log("Recreated SL", symbol, stop)
         if need_tp:
             ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
                             params={**params, "newClientOrderId": new_client_id("reprot_tp"),
-                                    "stopPrice": float(tp)})
+                                    "stopPrice": float(tp),
+                                    "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
             log("Recreated TP", symbol, tp)
     except Exception as e:
         log("ensure_protection_orders failed", symbol, str(e))
@@ -248,7 +250,7 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         raise
 
     # Protective orders
-    params_ro = {"reduceOnly": True, "newClientOrderId": new_client_id("prot")}
+    params_ro = {"reduceOnly": True}
     if HEDGE_MODE:
         params_ro["positionSide"] = "LONG" if side == "buy" else "SHORT"
 
@@ -256,27 +258,32 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
     tp_ok = True
     try:
         ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
-                        params={**params_ro, "stopPrice": float(sl_price)})
+                        params={**params_ro, "newClientOrderId": new_client_id("prot_sl"),
+                                "stopPrice": float(sl_price),
+                                "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
         log("SL placed", sl_price)
     except Exception as e:
         sl_ok = False
         log("Failed to place SL:", str(e))
     try:
         ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
-                        params={**params_ro, "stopPrice": float(tp_price)})
+                        params={**params_ro, "newClientOrderId": new_client_id("prot_tp"),
+                                "stopPrice": float(tp_price),
+                                "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
         log("TP placed", tp_price)
     except Exception as e:
         tp_ok = False
         log("Failed to place TP:", str(e))
 
-    if (not sl_ok) or (not tp_ok):
-        log("Protection failed, attempting immediate safe close...", symbol)
+    # If SL failed, we cannot remain unprotected: attempt emergency close.
+    if not sl_ok:
+        log("SL placement failed; attempting immediate safe close...", symbol)
         try:
             ex.create_order(symbol, type="market", side=opposite, amount=qty, params={"reduceOnly": True})
             log("Emergency close placed for", symbol)
         except Exception as e:
             log("Emergency close FAILED", symbol, str(e))
-        raise RuntimeError("Protection placement failed; entry closed/attempted close.")
+        raise RuntimeError("SL placement failed; entry closed/attempted close.")
 
     return entry
 

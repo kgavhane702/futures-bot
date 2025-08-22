@@ -44,6 +44,8 @@ BREAKEVEN_AFTER_R = float(os.getenv("BREAKEVEN_AFTER_R", "1.0"))
 TRAIL_AFTER_R     = float(os.getenv("TRAIL_AFTER_R", "1.5"))
 TRAIL_ATR_MULT    = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
 MAX_SL_PCT        = float(os.getenv("MAX_SL_PCT", "0"))  # 0 disables; e.g., 0.02 means max 2% distance
+WORKING_TYPE      = os.getenv("WORKING_TYPE", "MARK_PRICE")  # MARK_PRICE or CONTRACT_PRICE
+PRICE_PROTECT     = os.getenv("PRICE_PROTECT", "false").lower() == "true"
 
 # Ops
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
@@ -51,3 +53,5 @@ TRADES_CSV   = os.getenv("LOG_TRADES_CSV", "trades_futures.csv")
 DRY_RUN      = os.getenv("DRY_RUN", "true").lower() == "true"
 ALLOW_SHORTS = os.getenv("ALLOW_SHORTS", "true").lower() == "true"
 HEDGE_MODE   = os.getenv("HEDGE_MODE", "false").lower() == "true"  # assume one-way unless true
+ENTRY_SLIPPAGE_MAX_PCT = float(os.getenv("ENTRY_SLIPPAGE_MAX_PCT", "0.01"))  # 1% max slippage guard
+ORPHAN_SWEEP_SECONDS = int(os.getenv("ORPHAN_SWEEP_SECONDS", "10"))
