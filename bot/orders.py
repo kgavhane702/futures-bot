@@ -347,26 +347,24 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         raise
 
     # Protective orders
-    params_ro = {"reduceOnly": True, "closePosition": True}
+    params_ro = {"closePosition": True}
     if HEDGE_MODE:
         params_ro["positionSide"] = "LONG" if side == "buy" else "SHORT"
 
     sl_ok = True
     tp_ok = True
     try:
-        ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=qty,
+        ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=None,
                         params={**params_ro, "newClientOrderId": new_client_id("prot_sl"),
-                                "stopPrice": float(sl_price),
-                                "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                                "stopPrice": float(sl_price)})
         log("SL placed", sl_price)
     except Exception as e:
         sl_ok = False
         log("Failed to place SL:", str(e))
     try:
-        ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=qty,
+        ex.create_order(symbol, type="TAKE_PROFIT_MARKET", side=opposite, amount=None,
                         params={**params_ro, "newClientOrderId": new_client_id("prot_tp"),
-                                "stopPrice": float(tp_price),
-                                "workingType": WORKING_TYPE, "priceProtect": PRICE_PROTECT})
+                                "stopPrice": float(tp_price)})
         log("TP placed", tp_price)
     except Exception as e:
         tp_ok = False
