@@ -301,6 +301,7 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
         except Exception as e:
             log("Emergency close FAILED", symbol, str(e))
         raise RuntimeError("SL placement failed; entry closed/attempted close.")
+    # If only TP failed, keep the position open with SL and allow protection checker to recreate TP.
 
     return entry
 

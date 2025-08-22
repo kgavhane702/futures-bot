@@ -6,7 +6,7 @@ import ccxt
 from .config import (TIMEFRAME, HTF_TIMEFRAME, UNIVERSE_SIZE, MAX_POSITIONS,
                      ATR_MULT_SL, TP_R_MULT, POLL_SECONDS, TRADES_CSV, DRY_RUN,
                      BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ORPHAN_SWEEP_SECONDS, ORPHAN_SWEEP_GRACE_SECONDS,
-                     PROTECTION_CHECK_SECONDS)
+                     PROTECTION_CHECK_SECONDS, USE_FLIP_EXIT, FLIP_CONFIRM_BARS, USE_TRAILING, ENTRY_SLIPPAGE_MAX_PCT, TOTAL_NOTIONAL_CAP_FRACTION, LEVERAGE)
 from .logging_utils import log
 from .exchange_client import get_exchange, ensure_symbol_config, round_amount
 from .universe import top_usdt_perps
@@ -187,12 +187,44 @@ def main():
 
                 side_ex = "buy" if side_sig == "long" else "sell"
                 stop, tp, r_per_unit = protective_prices(side_ex, entry_price, atr, ATR_MULT_SL, TP_R_MULT)
+                if stop is None or tp is None or r_per_unit <= 0:
+                    log("Skip due to STOP_CAP_BEHAVIOR=skip and SL too wide", sym)
+                    continue
 
                 qty = size_position(entry_price, stop, equity)
                 qty = round_amount(ex, sym, qty)
                 if qty <= 0:
                     log("qty after rounding <= 0, skip", sym)
                     continue
+
+                # Entry slippage guard (compare latest ticker to planned entry)
+                try:
+                    tkr = ex.fetch_ticker(sym)
+                    last_px = float(tkr.get("last") or tkr.get("close") or entry_price)
+                    slip = abs(last_px - entry_price) / max(1e-9, entry_price)
+                    if slip > ENTRY_SLIPPAGE_MAX_PCT:
+                        log("Skip due to slippage", sym, f"slip={(slip*100):.2f}% > {(ENTRY_SLIPPAGE_MAX_PCT*100):.2f}%")
+                        continue
+                except Exception:
+                    pass
+
+                # Total notional exposure cap across open positions
+                try:
+                    open_notional = 0.0
+                    for osym, opos in open_pos.items():
+                        plist = opos if isinstance(opos, list) else [opos]
+                        # Approx notional by last known price
+                        tkr_os = ex.fetch_ticker(osym)
+                        last_os = float(tkr_os.get("last") or tkr_os.get("close") or 0)
+                        for p in plist:
+                            open_notional += float(p.get("size", 0.0)) * last_os
+                    next_notional = qty * entry_price
+                    total_cap = equity * LEVERAGE * TOTAL_NOTIONAL_CAP_FRACTION
+                    if (open_notional + next_notional) > total_cap:
+                        log("Skip due to total notional cap", sym)
+                        continue
+                except Exception:
+                    pass
 
                 try:
                     place_bracket_orders(ex, sym, side_ex, qty, entry_price, stop, tp)
@@ -241,42 +273,44 @@ def main():
                         # Ensure SL/TP exist if user cancelled them on exchange (run regardless of prev validity)
                         ensure_protection_orders(ex, sym, side, p["size"], entry_ref, atr_for_prot,
                                                  ATR_MULT_SL, TP_R_MULT)
-                        # Trail / BE only when indicators are valid
-                        if not valid_row(prev):
-                            continue
-                        maybe_update_trailing(ex, sym, side, p["size"], entry_ref, float(prev["atr"]), last["close"],
-                                              ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
-                    # Flip exit requires two consecutive EMA bars against position
-                    tr_prev = "up" if prev["ema_fast"] > prev["ema_slow"] else "down"
-                    tr_last = "up" if last["ema_fast"] > last["ema_slow"] else "down"
-                    flip_against_long = (tr_prev == "down" and tr_last == "down")
-                    flip_against_short = (tr_prev == "up" and tr_last == "up")
-                    # In hedge mode, pos might be a list; here we only act on symbol-level when single dict
-                    if isinstance(pos, dict):
-                        if pos["side"] == "long" and flip_against_long:
-                            log("Flip out of long — closing", sym)
-                            if not DRY_RUN:
-                                try:
-                                    ex.create_order(sym, "market", "sell", pos["size"], params={"reduceOnly": True})
-                                except Exception:
+                        # Trail / BE only when indicators are valid and enabled
+                        if USE_TRAILING and valid_row(prev):
+                            maybe_update_trailing(ex, sym, side, p["size"], entry_ref, float(prev["atr"]), last["close"],
+                                                  ATR_MULT_SL, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT)
+                    # Flip exit requires N-bar confirmation and must be enabled
+                    if USE_FLIP_EXIT:
+                        try:
+                            n = max(1, int(FLIP_CONFIRM_BARS))
+                        except Exception:
+                            n = 2
+                        tr_seq = ["up" if ltf.iloc[-k]["ema_fast"] > ltf.iloc[-k]["ema_slow"] else "down" for k in range(1, n+1)]
+                        flip_against_long = all(t == "down" for t in tr_seq)
+                        flip_against_short = all(t == "up" for t in tr_seq)
+                        if isinstance(pos, dict):
+                            if pos["side"] == "long" and flip_against_long:
+                                log("Flip out of long — closing", sym)
+                                if not DRY_RUN:
                                     try:
-                                        ex.create_order(sym, "market", "sell", None, params={"reduceOnly": True, "closePosition": True})
+                                        ex.create_order(sym, "market", "sell", pos["size"], params={"reduceOnly": True})
                                     except Exception:
-                                        pass
-                            else:
-                                log("[DRY_RUN] close long", sym)
-                        elif pos["side"] == "short" and flip_against_short:
-                            log("Flip out of short — closing", sym)
-                            if not DRY_RUN:
-                                try:
-                                    ex.create_order(sym, "market", "buy", pos["size"], params={"reduceOnly": True})
-                                except Exception:
+                                        try:
+                                            ex.create_order(sym, "market", "sell", None, params={"reduceOnly": True, "closePosition": True})
+                                        except Exception:
+                                            pass
+                                else:
+                                    log("[DRY_RUN] close long", sym)
+                            elif pos["side"] == "short" and flip_against_short:
+                                log("Flip out of short — closing", sym)
+                                if not DRY_RUN:
                                     try:
-                                        ex.create_order(sym, "market", "buy", None, params={"reduceOnly": True, "closePosition": True})
+                                        ex.create_order(sym, "market", "buy", pos["size"], params={"reduceOnly": True})
                                     except Exception:
-                                        pass
-                            else:
-                                log("[DRY_RUN] close short", sym)
+                                        try:
+                                            ex.create_order(sym, "market", "buy", None, params={"reduceOnly": True, "closePosition": True})
+                                        except Exception:
+                                            pass
+                                else:
+                                    log("[DRY_RUN] close short", sym)
                 except Exception as e:
                     log("manage fail", sym, str(e))
 

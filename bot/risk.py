@@ -1,4 +1,4 @@
-from .config import ACCOUNT_EQUITY_USDT, RISK_PER_TRADE, ABS_RISK_USDT,                     LEVERAGE, MAX_NOTIONAL_FRACTION, MARGIN_BUFFER_FRAC, MAX_SL_PCT
+from .config import ACCOUNT_EQUITY_USDT, RISK_PER_TRADE, ABS_RISK_USDT,                     LEVERAGE, MAX_NOTIONAL_FRACTION, MARGIN_BUFFER_FRAC, MAX_SL_PCT, STOP_CAP_BEHAVIOR
 
 def equity_from_balance(ex):
     try:
@@ -34,7 +34,10 @@ def protective_prices(side, entry, atr, ATR_MULT_SL, TP_R_MULT):
         raw_stop = entry - ATR_MULT_SL * atr
         if MAX_SL_PCT and MAX_SL_PCT > 0:
             max_dist = entry * MAX_SL_PCT
-            raw_stop = max(raw_stop, entry - max_dist)
+            if (entry - raw_stop) > max_dist:
+                if STOP_CAP_BEHAVIOR == "skip":
+                    return None, None, 0.0
+                raw_stop = entry - max_dist
         stop = raw_stop
         r = max(entry - stop, 0.0)
         tp = entry + TP_R_MULT * r
@@ -42,7 +45,10 @@ def protective_prices(side, entry, atr, ATR_MULT_SL, TP_R_MULT):
         raw_stop = entry + ATR_MULT_SL * atr
         if MAX_SL_PCT and MAX_SL_PCT > 0:
             max_dist = entry * MAX_SL_PCT
-            raw_stop = min(raw_stop, entry + max_dist)
+            if (raw_stop - entry) > max_dist:
+                if STOP_CAP_BEHAVIOR == "skip":
+                    return None, None, 0.0
+                raw_stop = entry + max_dist
         stop = raw_stop
         r = max(stop - entry, 0.0)
         tp = entry - TP_R_MULT * r

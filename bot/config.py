@@ -21,7 +21,7 @@ ACCOUNT_EQUITY_USDT = float(os.getenv("ACCOUNT_EQUITY_USDT", "100"))
 RISK_PER_TRADE      = float(os.getenv("RISK_PER_TRADE", "0.01"))  # fraction of equity
 ABS_RISK_USDT       = float(os.getenv("ABS_RISK_USDT", "0"))      # fixed $ risk if > 0
 LEVERAGE            = int(os.getenv("LEVERAGE", "3"))
-MARGIN_MODE         = os.getenv("MARGIN_MODE", "cross")           # cross/isolated
+MARGIN_MODE         = os.getenv("MARGIN_MODE", "isolated")        # cross/isolated
 
 # Notional & margin guards
 MAX_NOTIONAL_FRACTION = float(os.getenv("MAX_NOTIONAL_FRACTION", "0.30"))  # cap of equity*leverage
@@ -46,6 +46,7 @@ TRAIL_ATR_MULT    = float(os.getenv("TRAIL_ATR_MULT", "1.0"))
 MAX_SL_PCT        = float(os.getenv("MAX_SL_PCT", "0"))  # 0 disables; e.g., 0.02 means max 2% distance
 WORKING_TYPE      = os.getenv("WORKING_TYPE", "MARK_PRICE")  # MARK_PRICE or CONTRACT_PRICE
 PRICE_PROTECT     = os.getenv("PRICE_PROTECT", "false").lower() == "true"
+STOP_CAP_BEHAVIOR = os.getenv("STOP_CAP_BEHAVIOR", "clamp").lower()  # 'clamp' or 'skip'
 
 # Ops
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
@@ -57,3 +58,7 @@ ENTRY_SLIPPAGE_MAX_PCT = float(os.getenv("ENTRY_SLIPPAGE_MAX_PCT", "0.01"))  # 1
 ORPHAN_SWEEP_SECONDS = int(os.getenv("ORPHAN_SWEEP_SECONDS", "10"))
 ORPHAN_SWEEP_GRACE_SECONDS = int(os.getenv("ORPHAN_SWEEP_GRACE_SECONDS", "60"))
 PROTECTION_CHECK_SECONDS = int(os.getenv("PROTECTION_CHECK_SECONDS", "7"))
+USE_FLIP_EXIT = os.getenv("USE_FLIP_EXIT", "false").lower() == "true"
+FLIP_CONFIRM_BARS = int(os.getenv("FLIP_CONFIRM_BARS", "2"))
+USE_TRAILING = os.getenv("USE_TRAILING", "false").lower() == "true"
+TOTAL_NOTIONAL_CAP_FRACTION = float(os.getenv("TOTAL_NOTIONAL_CAP_FRACTION", "0.50"))
