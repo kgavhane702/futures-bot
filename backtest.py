@@ -20,11 +20,19 @@ cfg = get_config()
 TIMEFRAME = cfg["TIMEFRAME"]
 HTF_TIMEFRAME = cfg["HTF_TIMEFRAME"]
 UNIVERSE_SIZE = cfg["UNIVERSE_SIZE"]
+UNIVERSE_SYMBOLS = cfg.get("UNIVERSE_SYMBOLS", [])
 
 ATR_MULT_SL = cfg["ATR_MULT_SL"]
 TP_R_MULT = cfg["TP_R_MULT"]
 MAX_SL_PCT = cfg["MAX_SL_PCT"]
 STOP_CAP_BEHAVIOR = cfg["STOP_CAP_BEHAVIOR"]
+RSI_LONG_MIN = cfg.get("RSI_LONG_MIN", 52)
+RSI_SHORT_MAX = cfg.get("RSI_SHORT_MAX", 48)
+MIN_ADX = cfg.get("MIN_ADX", 18)
+
+# --- Backtest costs (simple, per leg, in R units) ---
+# Apply once on entry and once on each exit leg (TP1, TP2, TP3 or SL)
+FEE_R = 0.0012
 
 ENTRY_SLIPPAGE_MAX_PCT = cfg["ENTRY_SLIPPAGE_MAX_PCT"]
 TOTAL_NOTIONAL_CAP_FRACTION = cfg["TOTAL_NOTIONAL_CAP_FRACTION"]
@@ -98,28 +106,28 @@ def run_backtest(
                 if stage == 0:
                     if l <= sl:
                         open_positions.pop(sym, None)
-                        return True, realized - 1.0
+                        return True, realized - (1.0 + FEE_R)
                     if h >= tp1:
-                        realized += 0.5 * 1.0
+                        realized += max(0.0, 0.3 * 1.0 - FEE_R)
                         sl = entry
                         stage = 1
                         continue
                 elif stage == 1:
                     if l <= sl:  # at entry
                         open_positions.pop(sym, None)
-                        return True, realized + 0.0
+                        return True, realized - FEE_R
                     if h >= tp2:
-                        realized += 0.3 * 2.0
-                        sl = tp1
+                        realized += max(0.0, 0.3 * 2.0 - FEE_R)
+                        sl = entry  # keep breakeven after TP2
                         stage = 2
                         continue
                 elif stage == 2:
                     if l <= sl:  # at tp1
-                        realized += 0.2 * 1.0
+                        realized += max(0.0, 0.4 * 1.0 - FEE_R)
                         open_positions.pop(sym, None)
                         return True, realized
                     if h >= tp3:
-                        realized += 0.2 * 3.0
+                        realized += max(0.0, 0.4 * 3.0 - FEE_R)
                         open_positions.pop(sym, None)
                         return True, realized
                 break
@@ -127,28 +135,28 @@ def run_backtest(
                 if stage == 0:
                     if h >= sl:
                         open_positions.pop(sym, None)
-                        return True, realized - 1.0
+                        return True, realized - (1.0 + FEE_R)
                     if l <= tp1:
-                        realized += 0.5 * 1.0
+                        realized += max(0.0, 0.3 * 1.0 - FEE_R)
                         sl = entry
                         stage = 1
                         continue
                 elif stage == 1:
                     if h >= sl:
                         open_positions.pop(sym, None)
-                        return True, realized + 0.0
+                        return True, realized - FEE_R
                     if l <= tp2:
-                        realized += 0.3 * 2.0
-                        sl = tp1
+                        realized += max(0.0, 0.3 * 2.0 - FEE_R)
+                        sl = entry  # keep breakeven after TP2
                         stage = 2
                         continue
                 elif stage == 2:
                     if h >= sl:
-                        realized += 0.2 * 1.0
+                        realized += max(0.0, 0.4 * 1.0 - FEE_R)
                         open_positions.pop(sym, None)
                         return True, realized
                     if l <= tp3:
-                        realized += 0.2 * 3.0
+                        realized += max(0.0, 0.4 * 3.0 - FEE_R)
                         open_positions.pop(sym, None)
                         return True, realized
                 break
@@ -195,11 +203,17 @@ def run_backtest(
 
             # If flat, check entry
             if sym not in open_positions and valid_row(prev):
-                side = (
-                    "long" if (prev["ema_fast"] > prev["ema_slow"] and prev["rsi"] >= 52)
-                    else "short" if (prev["ema_fast"] < prev["ema_slow"] and prev["rsi"] <= 48)
-                    else None
-                )
+                # Apply configurable thresholds (RSI/ADX)
+                try:
+                    adx_ok = float(prev.get("adx") or 0) >= float(MIN_ADX)
+                except Exception:
+                    adx_ok = True
+                side = None
+                if adx_ok:
+                    if (prev["ema_fast"] > prev["ema_slow"]) and (float(prev.get("rsi") or 0) >= float(RSI_LONG_MIN)):
+                        side = "long"
+                    elif (prev["ema_fast"] < prev["ema_slow"]) and (float(prev.get("rsi") or 0) <= float(RSI_SHORT_MAX)):
+                        side = "short"
                 if side is None:
                     continue
 
@@ -290,7 +304,7 @@ def run_backtest(
 if __name__ == "__main__":
     ex = get_exchange()
     ex.load_markets()
-    universe = top_usdt_perps(ex, UNIVERSE_SIZE)
+    universe = UNIVERSE_SYMBOLS if (isinstance(UNIVERSE_SYMBOLS, list) and len(UNIVERSE_SYMBOLS) > 0) else top_usdt_perps(ex, UNIVERSE_SIZE)
     print("Universe (first N shown):", universe[:UNIVERSE_SIZE])
 
     summary, trades, equity_r = run_backtest(

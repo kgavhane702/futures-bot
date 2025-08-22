@@ -58,11 +58,16 @@ def main():
 
     while True:
         try:
-            # Wait for new closed LTF candle
-            hb = ex.fetch_ohlcv("BTC/USDT", timeframe=TIMEFRAME, limit=3)
-            hb_df = pd.DataFrame(hb, columns=["ts","o","h","l","c","v"])
-            hb_df["ts"] = pd.to_datetime(hb_df["ts"], unit="ms")
-            latest_closed_ts = hb_df.iloc[-2]["ts"]
+            # Wait for new closed LTF candle (robust)
+            try:
+                hb = ex.fetch_ohlcv("BTC/USDT", timeframe=TIMEFRAME, limit=3)
+                hb_df = pd.DataFrame(hb, columns=["ts","o","h","l","c","v"])
+                hb_df["ts"] = pd.to_datetime(hb_df["ts"], unit="ms")
+                latest_closed_ts = hb_df.iloc[-2]["ts"]
+            except Exception as e:
+                log("heartbeat fetch_ohlcv failed; retrying…", str(e))
+                time.sleep(POLL_SECONDS)
+                continue
             if last_candle_time == latest_closed_ts:
                 # Periodic orphan-order sweep (every ~3 minutes)
                 try:
@@ -91,14 +96,28 @@ def main():
             update_state(last_candle_time=str(latest_closed_ts))
 
             # Universe & snapshot
-            universe = top_usdt_perps(ex, UNIVERSE_SIZE)
+            try:
+                universe = top_usdt_perps(ex, UNIVERSE_SIZE)
+            except Exception as e:
+                log("universe build failed; using fallback", str(e))
+                universe = ["BTC/USDT:USDT"]
             log("Universe:", ", ".join(universe))
-            update_state(universe=universe)
+            try:
+                update_state(universe=universe)
+            except Exception:
+                pass
 
-            open_pos = get_open_positions(ex)
+            try:
+                open_pos = get_open_positions(ex)
+            except Exception as e:
+                log("get_open_positions failed", str(e))
+                open_pos = {}
             open_syms = set(open_pos.keys())
             log("Open positions:", open_pos)
-            update_state(positions=open_pos)
+            try:
+                update_state(positions=open_pos)
+            except Exception:
+                pass
 
             # Simplified orphan logic: only when flat cancel reduceOnly for that symbol
             for sym in open_syms:
@@ -286,11 +305,9 @@ def main():
                             replace_stop_loss_close_position(ex, sym, ex_side, target_sl)
                             log("SL moved to entry after TP1", sym, target_sl)
                         elif num_tp_open == 1:
-                            # After TP2 fill: move SL to TP1 price = entry +/- 1R inferred from remaining TP3
+                            # After TP2 fill: move SL back to breakeven (entry)
                             only_tp = float(tp_prices[0])
-                            # Infer 1R
-                            r_unit = abs(only_tp - entry) / 3.0
-                            target_sl = entry + (r_unit if ex_side == "buy" else -r_unit)
+                            target_sl = entry
                             target_sl, _tmp = adjust_protection_prices(ex, sym, ex_side, entry, target_sl, only_tp)
                             target_sl, _tmp = enforce_trigger_distance_with_last(ex, sym, ex_side, last_px, target_sl, _tmp)
                             if ex_side == "buy" and current_sl_max is not None and current_sl_max >= target_sl - 1e-9:
@@ -298,7 +315,7 @@ def main():
                             if ex_side == "sell" and current_sl_min is not None and current_sl_min <= target_sl + 1e-9:
                                 continue
                             replace_stop_loss_close_position(ex, sym, ex_side, target_sl)
-                            log("SL moved to TP1 after TP2", sym, target_sl)
+                            log("SL moved to entry after TP2", sym, target_sl)
                         else:
                             # After TP3 fill: cancel SL
                             try:

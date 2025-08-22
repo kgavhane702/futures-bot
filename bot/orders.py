@@ -291,11 +291,11 @@ def reconcile_orphan_reduce_only_orders(ex, symbol, pos, grace_cutoff_ms: float 
     try:
         with _lock_for(symbol):
             open_orders = get_open_orders(ex, symbol)
-        reduce_only = [o for o in open_orders if o.get("reduceOnly")]
-        if isinstance(pos, list):
-            pos_size = sum(float(p.get("size", 0.0) or 0.0) for p in pos)
-        else:
-            pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
+            reduce_only = [o for o in open_orders if o.get("reduceOnly")]
+            if isinstance(pos, list):
+                pos_size = sum(float(p.get("size", 0.0) or 0.0) for p in pos)
+            else:
+                pos_size = 0.0 if (pos is None) else float(pos.get("size", 0.0))
         # If no position at all, cancel only reduceOnly orders (and honor grace window if provided)
         if pos_size <= 0 and reduce_only:
             for o in reduce_only:
@@ -344,7 +344,7 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
     entry_price = float(entry_price)
     sl_price = round_price(ex, symbol, sl_price)
     # Multi-TP constants (fixed behavior)
-    TP_SPLITS = [0.5, 0.3, 0.2]
+    TP_SPLITS = [0.3, 0.3, 0.4]
     TP_R_LEVELS = [1.0, 2.0, 3.0]
     # Compute R unit and TP prices
     r_unit = _r_unit_from_entry_and_stop(side, entry_price, sl_price)
@@ -400,7 +400,7 @@ def place_bracket_orders(ex, symbol, side, qty, entry_price, sl_price, tp_price)
     sl_ok = True
     tps_ok = True
     # Split amounts for TPs
-    tp_amounts = _split_amounts(ex, symbol, qty, [0.5, 0.3, 0.2])
+    tp_amounts = _split_amounts(ex, symbol, qty, TP_SPLITS)
     with _lock_for(symbol):
         try:
             ex.create_order(symbol, type="STOP_MARKET", side=opposite, amount=None,
