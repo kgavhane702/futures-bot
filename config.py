@@ -25,8 +25,8 @@ MAX_POSITIONS      = int(os.getenv("MAX_POSITIONS", "1"))
 ACCOUNT_EQUITY_USDT= float(os.getenv("ACCOUNT_EQUITY_USDT", "100"))
 RISK_PER_TRADE     = float(os.getenv("RISK_PER_TRADE", "0.01"))  # 1% of equity
 ABS_RISK_USDT      = float(os.getenv("ABS_RISK_USDT", "0"))      # if > 0, overrides RISK_PER_TRADE
-LEVERAGE           = int(os.getenv("LEVERAGE", "3"))
-MARGIN_MODE        = os.getenv("MARGIN_MODE", "cross")           # cross/isolated
+LEVERAGE           = int(os.getenv("LEVERAGE", "5"))
+MARGIN_MODE        = os.getenv("MARGIN_MODE", "isolated")           # cross/isolated
 
 # Notional & Margin guards
 MAX_NOTIONAL_FRACTION = float(os.getenv("MAX_NOTIONAL_FRACTION", "0.30"))  # cap of equity*leverage
@@ -43,7 +43,7 @@ ADX_PERIOD         = int(os.getenv("ADX_PERIOD", "14"))
 MIN_ADX            = float(os.getenv("MIN_ADX", "18"))  # filter chop; raise to be pickier (e.g., 20–25)
 
 # SL/TP & Trailing
-ATR_MULT_SL        = float(os.getenv("ATR_MULT_SL", "2.0"))
+ATR_MULT_SL        = float(os.getenv("ATR_MULT_SL", "2.5"))
 TP_R_MULT          = float(os.getenv("TP_R_MULT", "2.0"))
 BREAKEVEN_AFTER_R  = float(os.getenv("BREAKEVEN_AFTER_R", "1.0"))   # move SL to BE after +1R
 TRAIL_AFTER_R      = float(os.getenv("TRAIL_AFTER_R", "1.5"))       # start trailing after +1.5R
