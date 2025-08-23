@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Dashboard</h2>
+  <section class="cards">
+    <div class="card">
+      <div class="card-title">Total PnL (USDT)</div>
+      <div class="card-value" id="total-pnl">0.0000</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Active Symbols</div>
+      <div class="card-value" id="active-symbols">0</div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Prices</h3>
+    <table id="prices-table" class="table">
+      <thead><tr><th>Symbol</th><th>Price</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="/static/dashboard.js"></script>
+{% endblock %}
+
+

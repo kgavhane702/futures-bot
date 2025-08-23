@@ -3,3 +3,6 @@ pandas
 numpy
 python-dotenv
 ta
+fastapi
+uvicorn
+jinja2

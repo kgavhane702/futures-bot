@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Futures Bot</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="navbar">
+      <div class="brand">Futures Bot</div>
+      <ul class="menu">
+        <li><a href="/dashboard">Dashboard</a></li>
+        <li><a href="/positions">Positions</a></li>
+        <li><a href="/logs">Logs</a></li>
+      </ul>
+    </nav>
+    <main class="container">
+      {% block content %}{% endblock %}
+      <aside class="statusbar">
+        <h4>Threads</h4>
+        <div id="threads"></div>
+      </aside>
+    </main>
+    <script src="/static/status.js"></script>
+  </body>
+  </html>
+
+

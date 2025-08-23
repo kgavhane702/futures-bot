@@ -1,5 +1,6 @@
 import os, time, math, traceback
 from datetime import datetime, UTC
+from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
 
@@ -59,9 +60,20 @@ TRADES_CSV         = os.getenv("LOG_TRADES_CSV", "trades_futures.csv")
 DRY_RUN            = os.getenv("DRY_RUN", "true").lower() == "true"
 ALLOW_SHORTS       = os.getenv("ALLOW_SHORTS", "true").lower() == "true"  # selling allowed (futures)
 
-# ==== Helpers ====
+# ==== Timezone / Helpers ====
+TIMEZONE_CFG       = os.getenv("TIMEZONE", "indian").strip().lower()
+
+def _resolve_tz_name(cfg: str) -> str:
+    if cfg in ("indian", "ist", "asia/kolkata", "asia/calcutta"):
+        return "Asia/Kolkata"
+    if cfg in ("utc",):
+        return "UTC"
+    return cfg or "Asia/Kolkata"
+
+TZ_NAME            = _resolve_tz_name(TIMEZONE_CFG)
+TZ                 = UTC if TZ_NAME.upper() == "UTC" else ZoneInfo(TZ_NAME)
 def log(*a):
-    print(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"), "-", *a, flush=True)
+    print(datetime.now(UTC).astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S"), "-", *a, flush=True)
 
 def exchange():
     klass = getattr(ccxt, EXCHANGE_ID)
@@ -334,14 +346,15 @@ def main():
             # Heartbeat: wait for a *new* closed LTF candle
             hb = ex.fetch_ohlcv("BTC/USDT", timeframe=TIMEFRAME, limit=3)
             hb_df = pd.DataFrame(hb, columns=["ts","o","h","l","c","v"])
-            hb_df["ts"] = pd.to_datetime(hb_df["ts"], unit="ms")
+            hb_df["ts"] = pd.to_datetime(hb_df["ts"], unit="ms", utc=True)
             latest_closed_ts = hb_df.iloc[-2]["ts"]
             if last_candle_time == latest_closed_ts:
                 log("waiting for next candle...")
                 time.sleep(POLL_SECONDS)
                 continue
             last_candle_time = latest_closed_ts
-            log(f"New {TIMEFRAME} close @ {latest_closed_ts}")
+            # Display in configured TZ
+            log(f"New {TIMEFRAME} close @ {latest_closed_ts.tz_convert(TZ)}")
 
             # Build universe
             universe = top_usdt_perps(ex, UNIVERSE_SIZE)
@@ -407,7 +420,7 @@ def main():
                 try:
                     place_bracket_orders(ex, sym, side_ex, qty, entry_price, stop, tp)
                     write_trade({
-                        "time": datetime.now(UTC).isoformat(),
+                        "time": datetime.now(UTC).astimezone(TZ).isoformat(),
                         "symbol": sym,
                         "side": side_sig,
                         "qty": qty,
