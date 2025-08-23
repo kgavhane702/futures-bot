@@ -1,9 +1,9 @@
 import threading
 import time
 
-from config import MONITOR_SECONDS, DRY_RUN
-from utils import log
-from state import STATE
+from bot.config import MONITOR_SECONDS, DRY_RUN
+from bot.utils import log
+from bot.state import STATE
 
 
 def _fetch_symbol_price(ex, symbol: str) -> float:

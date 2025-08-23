@@ -1,6 +1,6 @@
 import math
 
-from config import (
+from .config import (
     ACCOUNT_EQUITY_USDT,
     RISK_PER_TRADE,
     ABS_RISK_USDT,

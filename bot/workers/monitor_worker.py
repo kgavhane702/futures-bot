@@ -1,10 +1,10 @@
 import threading
 import time
 
-from config import MONITOR_SECONDS, UNIVERSE_SIZE, ORPHAN_PROTECT_SECONDS, ORPHAN_MIN_AGE_SECONDS
-from utils import log
-from state import STATE
-from market_data import top_usdt_perps
+from ..config import MONITOR_SECONDS, UNIVERSE_SIZE, ORPHAN_PROTECT_SECONDS, ORPHAN_MIN_AGE_SECONDS
+from ..utils import log
+from ..state import STATE
+from ..market_data import top_usdt_perps
 
 
 def _fetch_symbol_price(ex, symbol: str) -> float:

@@ -1,7 +1,7 @@
 import ccxt
 
-from config import EXCHANGE_ID, API_KEY, API_SECRET, USE_TESTNET, LEVERAGE, MARGIN_MODE
-from utils import log
+from .config import EXCHANGE_ID, API_KEY, API_SECRET, USE_TESTNET, LEVERAGE, MARGIN_MODE
+from .utils import log
 
 
 def exchange():

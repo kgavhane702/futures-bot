@@ -1,9 +1,9 @@
 import threading
 import time
 
-from config import PNL_MONITOR_SECONDS
-from utils import log
-from state import STATE
+from ..config import PNL_MONITOR_SECONDS
+from ..utils import log
+from ..state import STATE
 
 
 def _fetch_symbol_price(ex, symbol: str) -> float:

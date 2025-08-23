@@ -1,9 +1,9 @@
 import threading
 import time
 
-from config import ORPHAN_MONITOR_SECONDS, ORPHAN_PROTECT_SECONDS, ORPHAN_MIN_AGE_SECONDS
-from utils import log
-from state import STATE
+from ..config import ORPHAN_MONITOR_SECONDS, ORPHAN_PROTECT_SECONDS, ORPHAN_MIN_AGE_SECONDS
+from ..utils import log
+from ..state import STATE
 
 
 def _all_usdt_perp_symbols(ex):

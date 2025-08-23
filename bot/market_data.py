@@ -1,6 +1,6 @@
 import pandas as pd
 
-from utils import log
+from .utils import log
 
 
 def top_usdt_perps(ex, n: int = 12):

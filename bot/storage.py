@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 
-from config import TRADES_CSV
+from .config import TRADES_CSV
 
 
 def write_trade(row: dict):

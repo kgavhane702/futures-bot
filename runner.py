@@ -5,7 +5,7 @@ from datetime import datetime, UTC
 import pandas as pd
 import ccxt
 
-from config import (
+from bot.config import (
     TIMEFRAME,
     HTF_TIMEFRAME,
     UNIVERSE_SIZE,
@@ -21,21 +21,21 @@ from config import (
     ORPHAN_MIN_AGE_SECONDS,
     SCAN_WHEN_FLAT_SECONDS,
 )
-from utils import log
-from state import STATE
-from exchange_client import exchange, set_leverage_and_margin
-from market_data import top_usdt_perps, fetch_ohlcv_df
-from indicators import add_indicators, valid_row
-from signals import trend_and_signal, score_signal
-from risk import equity_from_balance, size_position, round_qty, protective_prices
-from orders import cancel_reduce_only_orders, place_bracket_orders, maybe_update_trailing, place_reduce_only_exits
-from positions import get_open_positions, wait_for_position_visible
-from storage import write_trade
-from workers import pnl_worker
-from workers import monitor_worker
+from bot.utils import log
+from bot.state import STATE
+from bot.exchange_client import exchange, set_leverage_and_margin
+from bot.market_data import top_usdt_perps, fetch_ohlcv_df
+from bot.indicators import add_indicators, valid_row
+from bot.signals import trend_and_signal, score_signal
+from bot.risk import equity_from_balance, size_position, round_qty, protective_prices
+from bot.orders import cancel_reduce_only_orders, place_bracket_orders, maybe_update_trailing, place_reduce_only_exits
+from bot.positions import get_open_positions, wait_for_position_visible
+from bot.storage import write_trade
+from bot.workers import pnl_worker
+from bot.workers import monitor_worker
 import threading
 import uvicorn
-from ui.app import app as ui_app
+from bot.ui.app import app as ui_app
 
 
 def run():
@@ -71,7 +71,7 @@ def run():
             # Build universe and persist to state for UI/PNL worker
             universe = top_usdt_perps(ex, UNIVERSE_SIZE)
             try:
-                from state import STATE as _S
+                from bot.state import STATE as _S
                 _S.set_universe(universe)
             except Exception:
                 pass

@@ -1,4 +1,4 @@
-from config import ALLOW_SHORTS, EMA_SLOW, RSI_PERIOD, RSI_LONG_MIN, RSI_SHORT_MAX, MIN_ADX
+from .config import ALLOW_SHORTS, EMA_SLOW, RSI_PERIOD, RSI_LONG_MIN, RSI_SHORT_MAX, MIN_ADX
 
 
 def trend_and_signal(ltf, htf):

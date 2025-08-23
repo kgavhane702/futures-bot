@@ -1,8 +1,8 @@
 import time
 
-from config import DRY_RUN, MIN_NOTIONAL_USDT, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ATR_MULT_SL
-from state import STATE
-from utils import log
+from .config import DRY_RUN, MIN_NOTIONAL_USDT, BREAKEVEN_AFTER_R, TRAIL_AFTER_R, TRAIL_ATR_MULT, ATR_MULT_SL
+from .state import STATE
+from .utils import log
 
 
 def get_open_orders(ex, symbol):

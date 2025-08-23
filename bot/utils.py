@@ -1,7 +1,7 @@
 from datetime import datetime, UTC
 
-from config import TZ
-from state import STATE
+from .config import TZ
+from .state import STATE
 
 
 def log(*a):

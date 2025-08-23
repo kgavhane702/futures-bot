@@ -4,7 +4,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.volatility import AverageTrueRange
 
-from config import EMA_FAST, EMA_SLOW, RSI_PERIOD, ADX_PERIOD
+from .config import EMA_FAST, EMA_SLOW, RSI_PERIOD, ADX_PERIOD
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:

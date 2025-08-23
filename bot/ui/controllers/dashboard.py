@@ -2,11 +2,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from state import STATE
+from ...state import STATE
 
 
 router = APIRouter()
-templates = Jinja2Templates(directory="ui/views/templates")
+templates = Jinja2Templates(directory="bot/ui/views/templates")
 
 
 @router.get("/")
