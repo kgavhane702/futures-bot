@@ -33,6 +33,26 @@ MAX_NOTIONAL_FRACTION = float(os.getenv("MAX_NOTIONAL_FRACTION", "0.30"))  # cap
 MIN_NOTIONAL_USDT     = float(os.getenv("MIN_NOTIONAL_USDT", "10"))        # skip too-small orders
 MARGIN_BUFFER_FRAC    = float(os.getenv("MARGIN_BUFFER_FRAC", "0.90"))     # 90% buffer of cap
 
+# ==== Strategies ====
+STRATEGIES_RAW     = os.getenv("STRATEGIES", "mtf_ema_rsi_adx").strip()
+ENABLED_STRATEGIES = [s.strip() for s in STRATEGIES_RAW.split(",") if s.strip()]
+
+# Common target splits across strategies (partial take-profits). Must sum to <= 1.0
+TARGET_SPLITS_RAW  = os.getenv("TARGET_SPLITS", "0.5,0.3,0.2").strip()
+def _parse_splits(raw: str):
+    vals = []
+    for p in (raw or "").split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            vals.append(float(p))
+        except Exception:
+            pass
+    return vals[:3] if vals else [0.5, 0.3, 0.2]
+
+TARGET_SPLITS      = _parse_splits(TARGET_SPLITS_RAW)
+
 # ==== Signal Settings ====
 EMA_FAST           = int(os.getenv("EMA_FAST", "50"))
 EMA_SLOW           = int(os.getenv("EMA_SLOW", "200"))

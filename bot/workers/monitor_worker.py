@@ -108,9 +108,100 @@ def loop(ex):
                     prices[sym] = price
                     STATE.set_price(sym, price)
 
-            # Phase C: Orphan cleanup
+            # Phase C: Orphan cleanup and SL adjustments based on TP stages
             symbols_without_pos = [s for s in symbols if s not in positions]
             cancelled = _cancel_orphans(ex, symbols_without_pos)
+            if cancelled:
+                log("[Monitor] orphan cancelled count:", cancelled)
+
+            # Adjust SL after partial TPs if needed
+            try:
+                for sym, pos in positions.items():
+                    meta = STATE.get_strategy_meta(sym)
+                    stage = STATE.get_exit_stage(sym)
+                    if not meta:
+                        continue
+                    # Check open reduce-only TPs to infer filled stages
+                    try:
+                        ro = ex.fetch_open_orders(sym)
+                    except Exception:
+                        ro = []
+                    # Count remaining TP orders
+                    remaining_tps = [o for o in ro if o.get("reduceOnly") and "TAKE_PROFIT" in (o.get("type", "").upper())]
+                    total_expected = len(meta.get("targets", [])[:3])
+                    if total_expected == 0:
+                        continue
+                    remaining = len(remaining_tps)
+                    # Initialize baseline tp_remaining in meta and skip adjustments on first observation
+                    prev_tp_rem = meta.get("tp_remaining")
+                    if prev_tp_rem is None:
+                        try:
+                            cur = dict(meta)
+                            cur["tp_remaining"] = remaining
+                            STATE.set_strategy_meta(sym, cur)
+                        except Exception:
+                            pass
+                        continue
+                    # No change → no adjustment
+                    if remaining >= prev_tp_rem:
+                        continue
+                    # One or more TP orders filled
+                    fills_now = max(0, prev_tp_rem - remaining)
+                    new_stage = min(total_expected, stage + fills_now)
+                    log("[Monitor] TP fill detected", sym, f"prev_remaining={prev_tp_rem}", f"now={remaining}", f"stage {stage}->{new_stage}")
+                    # Update meta with new tp_remaining
+                    try:
+                        cur = dict(meta)
+                        cur["tp_remaining"] = remaining
+                        STATE.set_strategy_meta(sym, cur)
+                    except Exception:
+                        pass
+                    # Adjust SL per stage transitions
+                    adj_sl = None
+                    if new_stage >= 1 and stage < 1:
+                        # After TP1 -> move SL to breakeven (entry)
+                        entry_proxy = meta.get("entry") or positions.get(sym, {}).get("entryPrice") or STATE.snapshot().get("prices", {}).get(sym)
+                        if entry_proxy:
+                            adj_sl = float(entry_proxy)
+                    if new_stage >= 2 and stage < 2:
+                        # After TP2 -> move SL to TP1
+                        t1s = meta.get("targets") or []
+                        if t1s:
+                            adj_sl = float(t1s[0])
+                    if new_stage >= total_expected:
+                        # All TPs filled; position should be closed by TPs soon
+                        try:
+                            STATE.set_exit_stage(sym, new_stage)
+                        except Exception:
+                            pass
+                        log("[Monitor] all TPs filled; awaiting position closure", sym)
+                        continue
+                    if adj_sl is not None and pos.get("size", 0) > 0:
+                        # Cancel only SLs, keep TPs
+                        try:
+                            from ..orders import cancel_reduce_only_stop_orders
+                            cancel_reduce_only_stop_orders(ex, sym)
+                        except Exception:
+                            pass
+                        try:
+                            side = "sell" if pos.get("side")=="long" else "buy"
+                            # Avoid immediate trigger
+                            last = STATE.snapshot().get("prices", {}).get(sym)
+                            if isinstance(last, (int, float)):
+                                if side == "sell" and adj_sl >= last:
+                                    adj_sl = last * 0.999
+                                elif side == "buy" and adj_sl <= last:
+                                    adj_sl = last * 1.001
+                            ex.create_order(sym, "STOP_MARKET", side, pos.get("size", 0), params={"reduceOnly": True, "stopPrice": float(adj_sl)})
+                            log("[Monitor] SL adjusted", sym, adj_sl)
+                        except Exception as e:
+                            log("[Monitor] SL adjust fail", sym, str(e))
+                    try:
+                        STATE.set_exit_stage(sym, new_stage)
+                    except Exception:
+                        pass
+            except Exception as e:
+                log("[Monitor] stage adjust error:", str(e))
 
             # Phase D: PnL compute
             pnl = _estimate_pnl_usdt(positions, prices or STATE.snapshot().get("prices", {}))

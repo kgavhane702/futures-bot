@@ -28,7 +28,8 @@ from bot.market_data import top_usdt_perps, fetch_ohlcv_df
 from bot.indicators import add_indicators, valid_row
 from bot.signals import trend_and_signal, score_signal
 from bot.risk import equity_from_balance, size_position, round_qty, protective_prices
-from bot.orders import cancel_reduce_only_orders, place_bracket_orders, maybe_update_trailing, place_reduce_only_exits
+from bot.strategies import load_strategies
+from bot.orders import cancel_reduce_only_orders, place_bracket_orders, maybe_update_trailing, place_reduce_only_exits, place_multi_target_orders
 from bot.positions import get_open_positions, wait_for_position_visible
 from bot.storage import write_trade
 from bot.workers import pnl_worker
@@ -41,6 +42,11 @@ from bot.ui.app import app as ui_app
 def run():
     ex = exchange()
     ex.load_markets()
+    strategies = load_strategies()
+    try:
+        log("Enabled strategies:", ", ".join(s.id for s in strategies))
+    except Exception:
+        pass
     last_candle_time = None
     last_flat_scan_ts = 0.0
 
@@ -115,38 +121,67 @@ def run():
                 last_flat_scan_ts = now_ts
 
             if new_candle or should_flat_scan:
-                # Scan signals
-                cands = []
+                # Strategy-based scan (reuse loaded strategies)
+                # Prefetch data per symbol/timeframe for strategies' needs
+                symbol_to_tf_data = {}
+                # Collect max requirements across strategies
+                reqs = {}
+                for s in strategies:
+                    for tf, lookback in s.required_timeframes().items():
+                        reqs[tf] = max(reqs.get(tf, 0), lookback)
                 for sym in universe:
-                    try:
-                        ltf = fetch_ohlcv_df(ex, sym, TIMEFRAME, limit=400)
-                        htf = fetch_ohlcv_df(ex, sym, HTF_TIMEFRAME, limit=400)
-                        ltf = add_indicators(ltf)
-                        htf = add_indicators(htf)
-                        tr, side = trend_and_signal(ltf, htf)
-                        if side is None:
-                            continue
-                        lrow = ltf.iloc[-2]
-                        score = score_signal(side, lrow)
-                        cands.append((sym, side, float(lrow["close"]), float(lrow["atr"]), score))
-                    except Exception as e:
-                        log("scan fail", sym, str(e))
+                    tf_map = {}
+                    for tf, lookback in reqs.items():
+                        try:
+                            tf_map[tf] = fetch_ohlcv_df(ex, sym, tf, limit=lookback)
+                        except Exception as e:
+                            tf_map[tf] = None
+                    symbol_to_tf_data[sym] = tf_map
 
-                cands.sort(key=lambda x: x[4], reverse=True)
-                log("Top signals (flat-scan):" if (should_flat_scan and not new_candle) else "Top signals:", cands[:5])
+                # Let strategies prepare
+                for s in strategies:
+                    try:
+                        s.prepare(symbol_to_tf_data)
+                    except Exception:
+                        pass
+
+                # Evaluate decisions
+                decisions = []
+                for sym in universe:
+                    for s in strategies:
+                        try:
+                            data = {tf: df for tf, df in symbol_to_tf_data[sym].items() if df is not None}
+                            d = s.decide(sym, data)
+                            if d and d.side in ("long", "short"):
+                                decisions.append(d)
+                        except Exception as e:
+                            log("strategy decide fail", s.id, sym, str(e))
+
+                # Rank decisions by score
+                decisions.sort(key=lambda d: d.score, reverse=True)
+                log(
+                    "Top decisions:",
+                    [
+                        (d.symbol, d.strategy_id, d.side, round(d.score, 2), round((d.confidence or 0.0), 2))
+                        for d in decisions[:5]
+                    ],
+                )
 
                 equity = equity_from_balance(ex)
                 placed = 0
-                for sym, side_sig, entry_price, atr, _ in cands:
+                for d in decisions:
+                    sym, side_sig, entry_price, atr = d.symbol, d.side, d.entry_price, d.atr
                     if sym in open_syms:
                         continue
                     if placed >= max(0, MAX_POSITIONS - len(open_syms)):
                         break
-                    if atr <= 0:
+                    if atr is None or atr <= 0 or entry_price is None:
                         continue
 
-                    stop, tp, r_per_unit = protective_prices("buy" if side_sig=="long" else "sell",
-                                                             entry_price, atr, TP_R_MULT)
+                    stop, tp = d.stop, d.take_profit
+                    if stop is None or tp is None:
+                        stop, tp, _ = protective_prices("buy" if side_sig=="long" else "sell",
+                                                         entry_price, atr, TP_R_MULT)
 
                     qty = size_position(entry_price, stop, equity)
                     qty = round_qty(ex, sym, qty)
@@ -167,13 +202,32 @@ def run():
 
                     side_ex = "buy" if side_sig == "long" else "sell"
                     try:
-                        place_bracket_orders(ex, sym, side_ex, qty, entry_price, stop, tp)
+                        # Prefer multi-target if provided by strategy
+                        if d.targets and d.splits:
+                            place_multi_target_orders(ex, sym, side_ex, qty, entry_price, d.initial_stop or stop, d.targets, d.splits)
+                            try:
+                                from bot.state import STATE as _S
+                                _S.set_strategy_meta(sym, {
+                                    "strategy": d.strategy_id,
+                                    "confidence": round((d.confidence or 0.0), 4),
+                                    "targets": [float(x) for x in (d.targets or [])],
+                                    "splits": [float(x) for x in (d.splits or [])],
+                                    "initial_stop": float(d.initial_stop or stop),
+                                    "entry": float(entry_price),
+                                    "qty": float(qty),
+                                })
+                            except Exception:
+                                pass
+                        else:
+                            place_bracket_orders(ex, sym, side_ex, qty, entry_price, stop, tp)
                         # After entry, poll briefly so positions become visible ASAP for workers/UI
                         wait_for_position_visible(ex, sym, timeout_seconds=6.0, poll_seconds=0.5)
                         write_trade({
                             "time": datetime.now(UTC).astimezone(TZ).isoformat(),
                             "symbol": sym,
                             "side": side_sig,
+                            "strategy": d.strategy_id,
+                            "confidence": round((d.confidence or 0.0), 4),
                             "qty": qty,
                             "entry": entry_price,
                             "stop": stop,

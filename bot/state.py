@@ -15,6 +15,9 @@ class BotState:
         self._last_entry_ts: Dict[str, float] = {}
         self._universe: List[str] = []
         self._threads: Dict[str, Dict[str, Any]] = {}
+        # Strategy/exit stage tracking per symbol
+        self._exit_stage: Dict[str, int] = {}  # 0 none, 1 after TP1, 2 after TP2, 3 closed
+        self._strategy_meta: Dict[str, Dict[str, Any]] = {}
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -28,6 +31,8 @@ class BotState:
                 "last_entry_ts": dict(self._last_entry_ts),
                 "universe": list(self._universe),
                 "threads": {k: dict(v) for k, v in self._threads.items()},
+                "exit_stage": dict(self._exit_stage),
+                "strategy_meta": {k: dict(v) for k, v in self._strategy_meta.items()},
             }
 
     def set_price(self, symbol: str, price: float):
@@ -50,10 +55,20 @@ class BotState:
     def mark_exits_placed(self, symbol: str):
         with self._lock:
             self._last_exits_ts[symbol] = time.time()
+            self._exit_stage.setdefault(symbol, 0)
 
     def mark_entry(self, symbol: str):
         with self._lock:
             self._last_entry_ts[symbol] = time.time()
+            self._exit_stage[symbol] = 0
+
+    def set_exit_stage(self, symbol: str, stage: int):
+        with self._lock:
+            self._exit_stage[symbol] = max(0, min(3, int(stage)))
+
+    def get_exit_stage(self, symbol: str) -> int:
+        with self._lock:
+            return int(self._exit_stage.get(symbol, 0))
 
     def is_exits_protected(self, symbol: str, protect_seconds: int) -> bool:
         with self._lock:
@@ -71,6 +86,14 @@ class BotState:
             info_copy = dict(info)
             info_copy["ts"] = time.time()
             self._threads[name] = info_copy
+
+    def set_strategy_meta(self, symbol: str, meta: Dict[str, Any]):
+        with self._lock:
+            self._strategy_meta[symbol] = dict(meta)
+
+    def get_strategy_meta(self, symbol: str) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._strategy_meta.get(symbol, {}))
 
 
 STATE = BotState()
