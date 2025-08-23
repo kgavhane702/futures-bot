@@ -10,7 +10,9 @@ from ..market_data import top_usdt_perps
 def _fetch_symbol_price(ex, symbol: str) -> float:
     try:
         t = ex.fetch_ticker(symbol)
-        p = t.get("last") or t.get("close") or t.get("info", {}).get("lastPrice")
+        info = t.get("info", {}) or {}
+        # Prefer mark price for PnL approximation; fallback to last/close
+        p = info.get("markPrice") or t.get("last") or t.get("close") or info.get("lastPrice")
         return float(p) if p is not None else None
     except Exception:
         return None
