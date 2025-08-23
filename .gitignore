@@ -5,3 +5,4 @@ __pycache__/
 *.pyd
 *.log
 trades_futures.csv
+.env
