@@ -15,9 +15,17 @@ class MtfEmaRsiAdxStrategy(Strategy):
         return {TIMEFRAME: 400, HTF_TIMEFRAME: 400}
 
     def decide(self, symbol: str, data: Dict[str, pd.DataFrame]) -> Decision:
-        ltf = add_indicators(data[TIMEFRAME])
-        htf = add_indicators(data[HTF_TIMEFRAME])
-        if len(ltf) < 3 or len(htf) < 3:
+        # Guard for minimal data length before indicator access
+        ltf_raw = data.get(TIMEFRAME)
+        htf_raw = data.get(HTF_TIMEFRAME)
+        if ltf_raw is None or htf_raw is None:
+            return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
+        min_len = 60
+        if len(ltf_raw) < min_len or len(htf_raw) < min_len:
+            return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
+        ltf = add_indicators(ltf_raw)
+        htf = add_indicators(htf_raw)
+        if len(ltf) < min_len or len(htf) < min_len:
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
 
         l = ltf.iloc[-2]

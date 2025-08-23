@@ -48,9 +48,12 @@ class BreakoutStrategy(Strategy):
         htf_raw = data.get(HTF_TIMEFRAME)
         if ltf_raw is None or htf_raw is None:
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
+        min_len = 60
+        if len(ltf_raw) < min_len or len(htf_raw) < min_len:
+            return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
         ltf = add_indicators(ltf_raw)
         htf = add_indicators(htf_raw)
-        if len(ltf) < 60 or len(htf) < 60:
+        if len(ltf) < min_len or len(htf) < min_len:
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
 
         l = ltf.iloc[-2]
