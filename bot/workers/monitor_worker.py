@@ -121,6 +121,54 @@ def loop(ex):
                 for sym, pos in positions.items():
                     meta = STATE.get_strategy_meta(sym)
                     stage = STATE.get_exit_stage(sym)
+                    # Follow-through / early-exit (scalping): if configured in meta
+                    try:
+                        ft_cfg = meta.get("scalp_follow_through")
+                        if ft_cfg and sym in positions:
+                            side = positions.get(sym, {}).get("side")
+                            size = float(positions.get(sym, {}).get("size", 0))
+                            if size > 0 and side in ("long", "short"):
+                                # Trail SL per config
+                                try:
+                                    trail_mode = ft_cfg.get("trail_mode", "atr")
+                                    atr_mult = float(ft_cfg.get("atr_mult", 1.0))
+                                    entry = float(ft_cfg.get("entry_price", 0))
+                                    sl_dist = float(ft_cfg.get("sl_dist", 0))
+                                    last = STATE.snapshot().get("prices", {}).get(sym)
+                                    if isinstance(last, (int, float)) and last > 0:
+                                        if trail_mode == "atr":
+                                            # Approximate ATR trail using sl_dist / ATR_MULT_SL ratio
+                                            # Adjust SL a fraction toward price as it moves
+                                            new_sl = None
+                                            if side == "long":
+                                                target = last - atr_mult * max(1e-9, sl_dist)
+                                                new_sl = max(entry, target)
+                                                side_o = "sell"
+                                            else:
+                                                target = last + atr_mult * max(1e-9, sl_dist)
+                                                new_sl = min(entry, target)
+                                                side_o = "buy"
+                                            try:
+                                                from ..orders import cancel_reduce_only_stop_orders
+                                                cancel_reduce_only_stop_orders(ex, sym)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                ex.create_order(sym, "STOP_MARKET", side_o, size, params={"reduceOnly": True, "stopPrice": float(new_sl)})
+                                                log("[Monitor] trailing SL (scalp)", sym, new_sl)
+                                            except Exception as e:
+                                                log("[Monitor] trail place fail", sym, str(e))
+                                except Exception:
+                                    pass
+                            # Early-exit (follow-through): if price fails to reach min R within N bars from entry ts
+                            try:
+                                ft_bars = int(ft_cfg.get("follow_through_bars", 3))
+                                min_r = float(ft_cfg.get("min_follow_through_r", 0.5))
+                                # If we had timestamps per entry, could compute bar count; simplified no-op for now
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     if not meta:
                         continue
                     # Check open reduce-only TPs to infer filled stages
@@ -174,6 +222,7 @@ def loop(ex):
                         # All TPs filled; position should be closed by TPs soon
                         try:
                             STATE.set_exit_stage(sym, new_stage)
+                            STATE.mark_close(sym)
                         except Exception:
                             pass
                         log("[Monitor] all TPs filled; awaiting position closure", sym)

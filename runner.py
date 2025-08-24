@@ -207,7 +207,7 @@ def run():
                             place_multi_target_orders(ex, sym, side_ex, qty, entry_price, d.initial_stop or stop, d.targets, d.splits)
                             try:
                                 from bot.state import STATE as _S
-                                _S.set_strategy_meta(sym, {
+                                base_meta = {
                                     "strategy": d.strategy_id,
                                     "confidence": round((d.confidence or 0.0), 4),
                                     "targets": [float(x) for x in (d.targets or [])],
@@ -215,7 +215,15 @@ def run():
                                     "initial_stop": float(d.initial_stop or stop),
                                     "entry": float(entry_price),
                                     "qty": float(qty),
-                                })
+                                }
+                                # Merge any strategy-provided meta hints
+                                if getattr(d, 'meta', None):
+                                    try:
+                                        m = dict(d.meta)
+                                        base_meta.update(m)
+                                    except Exception:
+                                        pass
+                                _S.set_strategy_meta(sym, base_meta)
                             except Exception:
                                 pass
                         else:

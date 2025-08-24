@@ -9,7 +9,16 @@ from ..state import STATE
 def _fetch_symbol_price(ex, symbol: str) -> float:
     try:
         t = ex.fetch_ticker(symbol)
-        p = t.get("last") or t.get("close") or t.get("info", {}).get("lastPrice")
+        info = t.get("info", {}) or {}
+        bid = info.get("bidPrice") or t.get("bid")
+        ask = info.get("askPrice") or t.get("ask")
+        try:
+            if bid is not None and ask is not None:
+                from ..state import STATE
+                STATE.set_quote(symbol, float(bid), float(ask))
+        except Exception:
+            pass
+        p = t.get("last") or t.get("close") or info.get("lastPrice")
         return float(p) if p is not None else None
     except Exception:
         return None

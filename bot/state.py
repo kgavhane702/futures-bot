@@ -1,18 +1,20 @@
 import threading
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 class BotState:
     def __init__(self):
         self._lock = threading.Lock()
         self._prices: Dict[str, float] = {}
+        self._quotes: Dict[str, Dict[str, float]] = {}
         self._positions: Dict[str, Dict[str, Any]] = {}
         self._pnl: Dict[str, float] = {}
         self._total_pnl: float = 0.0
         self._logs: List[str] = []
         self._last_exits_ts: Dict[str, float] = {}
         self._last_entry_ts: Dict[str, float] = {}
+        self._last_close_ts: Dict[str, float] = {}
         self._universe: List[str] = []
         self._threads: Dict[str, Dict[str, Any]] = {}
         # Strategy/exit stage tracking per symbol
@@ -23,12 +25,14 @@ class BotState:
         with self._lock:
             return {
                 "prices": dict(self._prices),
+                "quotes": {k: dict(v) for k, v in self._quotes.items()},
                 "positions": dict(self._positions),
                 "pnl": dict(self._pnl),
                 "total_pnl": float(self._total_pnl),
                 "logs": list(self._logs[-500:]),
                 "last_exits_ts": dict(self._last_exits_ts),
                 "last_entry_ts": dict(self._last_entry_ts),
+                "last_close_ts": dict(self._last_close_ts),
                 "universe": list(self._universe),
                 "threads": {k: dict(v) for k, v in self._threads.items()},
                 "exit_stage": dict(self._exit_stage),
@@ -38,6 +42,15 @@ class BotState:
     def set_price(self, symbol: str, price: float):
         with self._lock:
             self._prices[symbol] = price
+
+    def set_quote(self, symbol: str, bid: float, ask: float):
+        with self._lock:
+            self._quotes[symbol] = {"bid": float(bid), "ask": float(ask)}
+
+    def get_quote(self, symbol: str) -> Optional[Dict[str, float]]:
+        with self._lock:
+            q = self._quotes.get(symbol)
+            return dict(q) if q else None
 
     def set_positions(self, positions: Dict[str, Dict[str, Any]]):
         with self._lock:
@@ -94,6 +107,14 @@ class BotState:
     def get_strategy_meta(self, symbol: str) -> Dict[str, Any]:
         with self._lock:
             return dict(self._strategy_meta.get(symbol, {}))
+
+    def mark_close(self, symbol: str):
+        with self._lock:
+            self._last_close_ts[symbol] = time.time()
+
+    def get_last_close_ts(self, symbol: str) -> Optional[float]:
+        with self._lock:
+            return self._last_close_ts.get(symbol)
 
 
 STATE = BotState()
