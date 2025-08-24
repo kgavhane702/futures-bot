@@ -10,9 +10,46 @@ load_dotenv()
 
 # ==== Exchange / General ====
 EXCHANGE_ID        = os.getenv("EXCHANGE", "binanceusdm")
+USE_TESTNET        = os.getenv("USE_TESTNET", "true").lower() == "true"
+
+# Optional: Load API credentials from Google Secret Manager when enabled
+USE_GCP_SECRETS    = os.getenv("USE_GCP_SECRETS", "false").lower() == "true"
+GCP_PROJECT        = os.getenv("GCP_PROJECT", "futures-bot").strip()
+GCP_SECRET_PREFIX  = os.getenv("GCP_SECRET_PREFIX", "futures-bot").strip()
+GCP_SECRET_NAME_API_KEY_TPL    = os.getenv("GCP_SECRET_NAME_API_KEY", "{prefix}-api-key-{env}")
+GCP_SECRET_NAME_API_SECRET_TPL = os.getenv("GCP_SECRET_NAME_API_SECRET", "{prefix}-api-secret-{env}")
+
+def _gcp_secret_or_default(secret_name: str, default_value: str) -> str:
+    try:
+        from google.cloud import secretmanager  # type: ignore
+    except Exception:
+        return default_value
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{GCP_PROJECT}/secrets/{secret_name}/versions/latest"
+        response = client.access_secret_version(name=name)
+        value = response.payload.data.decode("utf-8").strip()
+        return value or default_value
+    except Exception:
+        return default_value
+
+def _format_secret_name(tpl: str, env_label: str) -> str:
+    try:
+        return tpl.format(prefix=GCP_SECRET_PREFIX, exchange=EXCHANGE_ID, env=env_label)
+    except Exception:
+        return tpl
+
+_ENV_LABEL = "testnet" if USE_TESTNET else "mainnet"
+
+# Base values from environment (fallbacks if secrets not enabled or unavailable)
 API_KEY            = os.getenv("API_KEY", "")
 API_SECRET         = os.getenv("API_SECRET", "")
-USE_TESTNET        = os.getenv("USE_TESTNET", "true").lower() == "true"
+
+if USE_GCP_SECRETS:
+    _key_name = _format_secret_name(GCP_SECRET_NAME_API_KEY_TPL, _ENV_LABEL)
+    _sec_name = _format_secret_name(GCP_SECRET_NAME_API_SECRET_TPL, _ENV_LABEL)
+    API_KEY    = _gcp_secret_or_default(_key_name, API_KEY)
+    API_SECRET = _gcp_secret_or_default(_sec_name, API_SECRET)
 
 # ==== Strategy Timeframes ====
 TIMEFRAME          = os.getenv("TIMEFRAME", "15m")   # lower timeframe (LTF)

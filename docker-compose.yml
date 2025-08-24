@@ -2,6 +2,13 @@ services:
   bot:
     build: .
     env_file: .env
+    environment:
+      - USE_GCP_SECRETS=${USE_GCP_SECRETS:-true}
+      - GCP_PROJECT=${GCP_PROJECT:-futures-bot-469715}
+      - GCP_SECRET_PREFIX=${GCP_SECRET_PREFIX:-futures-bot}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
     restart: unless-stopped
     ports:
       - "8000:8000"
+    volumes:
+      - ./gcp-key.json:/app/gcp-key.json:ro

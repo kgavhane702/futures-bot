@@ -55,6 +55,37 @@ Provide `.env` in the project root (not committed).
 - UI: `bot/ui/` (FastAPI + Jinja + vanilla JS)
   - Positions table shows `strategy`, `confidence`, and TP stage.
 
+## Secrets with Google Cloud Secret Manager (optional)
+- Enable by setting in `.env`:
+  - `USE_GCP_SECRETS=true`
+  - `GCP_PROJECT=futures-bot` (or your GCP project id)
+  - Optional naming: `GCP_SECRET_PREFIX=futures-bot`
+  - Optional templates (defaults shown):
+    - `GCP_SECRET_NAME_API_KEY="{prefix}-api-key-{env}"`
+    - `GCP_SECRET_NAME_API_SECRET="{prefix}-api-secret-{env}"`
+- Secrets expected:
+  - For testnet: `${GCP_SECRET_PREFIX}-api-key-testnet`, `${GCP_SECRET_PREFIX}-api-secret-testnet`
+  - For mainnet: `${GCP_SECRET_PREFIX}-api-key-mainnet`, `${GCP_SECRET_PREFIX}-api-secret-mainnet`
+- Behavior:
+  - When `USE_GCP_SECRETS=true`, the bot loads `API_KEY`/`API_SECRET` from Secret Manager automatically based on `USE_TESTNET` (switch testnet/mainnet by toggling `USE_TESTNET`).
+  - If a secret is missing or access fails, it falls back to the values from environment `.env`.
+  - Grant the runtime identity (local `gcloud auth application-default login` or service account) `Secret Manager Secret Accessor` on those secrets.
+
+Example to create secrets (gcloud):
+```bash
+gcloud secrets create futures-bot-api-key-testnet --replication-policy="automatic"
+printf "%s" "TESTNET_API_KEY" | gcloud secrets versions add futures-bot-api-key-testnet --data-file=-
+
+gcloud secrets create futures-bot-api-secret-testnet --replication-policy="automatic"
+printf "%s" "TESTNET_API_SECRET" | gcloud secrets versions add futures-bot-api-secret-testnet --data-file=-
+
+gcloud secrets create futures-bot-api-key-mainnet --replication-policy="automatic"
+printf "%s" "MAINNET_API_KEY" | gcloud secrets versions add futures-bot-api-key-mainnet --data-file=-
+
+gcloud secrets create futures-bot-api-secret-mainnet --replication-policy="automatic"
+printf "%s" "MAINNET_API_SECRET" | gcloud secrets versions add futures-bot-api-secret-mainnet --data-file=-
+```
+
 ## Configuration (env)
 Key vars (see `.env.example`):
 - Exchange/API: `EXCHANGE`, `API_KEY`, `API_SECRET`, `USE_TESTNET`

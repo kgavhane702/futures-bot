@@ -6,3 +6,5 @@ __pycache__/
 *.log
 trades_futures.csv
 .env
+gcp-key.json
+data/
