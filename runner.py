@@ -157,19 +157,67 @@ def run():
                         except Exception as e:
                             log("strategy decide fail", s.id, sym, str(e))
 
-                # Rank decisions by score
-                decisions.sort(key=lambda d: d.score, reverse=True)
+                # Rank using confidence (0..1) first, then normalized score (score clamped to 0..100)
+                def _rank_key(d):
+                    try:
+                        conf = float(d.confidence or 0.0)
+                    except Exception:
+                        conf = 0.0
+                    try:
+                        norm = float(d.score or 0.0) / 100.0
+                    except Exception:
+                        norm = 0.0
+                    if norm < 0.0:
+                        norm = 0.0
+                    if norm > 1.0:
+                        norm = 1.0
+                    return (conf, norm)
+
+                # Build per-strategy groups
+                strat_to_ds = {}
+                for d in decisions:
+                    strat_to_ds.setdefault(d.strategy_id, []).append(d)
+                for sid in strat_to_ds:
+                    strat_to_ds[sid].sort(key=_rank_key, reverse=True)
+
+                capacity = max(0, MAX_POSITIONS - len(open_syms))
+                selected = []
+                if capacity > 0:
+                    # First pass: pick best from each strategy (diversity) up to capacity
+                    # Order strategies by their best candidate rank
+                    ordered_sids = sorted(strat_to_ds.keys(), key=lambda s: _rank_key(strat_to_ds[s][0]), reverse=True)
+                    for sid in ordered_sids:
+                        if capacity <= 0:
+                            break
+                        best = strat_to_ds[sid][0]
+                        selected.append(best)
+                        capacity -= 1
+                    # Second pass: fill remaining from the pool of leftover candidates by rank
+                    if capacity > 0:
+                        leftovers = []
+                        for sid, arr in strat_to_ds.items():
+                            leftovers.extend(arr[1:])
+                        leftovers.sort(key=_rank_key, reverse=True)
+                        for d in leftovers:
+                            if capacity <= 0:
+                                break
+                            selected.append(d)
+                            capacity -= 1
+                # Fall back if capacity was zero or no groups
+                if not selected:
+                    selected = sorted(decisions, key=_rank_key, reverse=True)
+
                 log(
-                    "Top decisions:",
+                    "Top decisions (balanced):",
                     [
-                        (d.symbol, d.strategy_id, d.side, round(d.score, 2), round((d.confidence or 0.0), 2))
-                        for d in decisions[:5]
+                        (d.symbol, d.strategy_id, d.side, round(d.score or 0.0, 2), round((d.confidence or 0.0), 2))
+                        for d in selected[:5]
                     ],
                 )
 
                 equity = equity_from_balance(ex)
                 placed = 0
-                for d in decisions:
+                for d in selected:
                     sym, side_sig, entry_price, atr = d.symbol, d.side, d.entry_price, d.atr
                     if sym in open_syms:
                         continue
@@ -201,6 +249,18 @@ def run():
                     cancel_reduce_only_orders(ex, sym)
 
                     side_ex = "buy" if side_sig == "long" else "sell"
+                    # Global spread guard
+                    try:
+                        from bot.state import STATE as _S
+                        from bot.config import MAX_SPREAD_PCT_GLOBAL
+                        q = _S.get_quote(sym)
+                        if q and q.get("bid") and q.get("ask") and q["ask"] > 0:
+                            sp = (q["ask"] - q["bid"]) / q["ask"]
+                            if sp > (MAX_SPREAD_PCT_GLOBAL / 100.0):
+                                log("skip by spread guard", sym, round(sp*100, 4), "%")
+                                continue
+                    except Exception:
+                        pass
                     try:
                         # Prefer multi-target if provided by strategy
                         if d.targets and d.splits:

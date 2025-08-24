@@ -133,5 +133,16 @@ def _resolve_tz_name(cfg: str) -> str:
 
 TZ_NAME            = _resolve_tz_name(TIMEZONE_CFG)
 TZ                 = UTC if TZ_NAME.upper() == "UTC" else ZoneInfo(TZ_NAME)
+# ==== Global Symbol/Market Guards ====
+# Minimum 24h quote volume (USDT) to include in universe
+MIN_24H_QUOTE_VOLUME_USDT = float(os.getenv("MIN_24H_QUOTE_VOLUME_USDT", "0"))
+# Optional: comma-separated symbols to always include/exclude (exact match)
+SYMBOL_WHITELIST = [s.strip() for s in (os.getenv("SYMBOL_WHITELIST", "").split(",")) if s.strip()]
+SYMBOL_BLACKLIST = [s.strip() for s in (os.getenv("SYMBOL_BLACKLIST", "").split(",")) if s.strip()]
+# Optional regex to exclude symbols (e.g., .*1000.* to skip 1000-multiplier tokens)
+SYMBOL_EXCLUDE_REGEX = os.getenv("SYMBOL_EXCLUDE_REGEX", "").strip()
+# Global max spread percent gate for entries (applies to all strategies)
+MAX_SPREAD_PCT_GLOBAL = float(os.getenv("MAX_SPREAD_PCT_GLOBAL", "0.20"))  # 0.20% default
+
 
 

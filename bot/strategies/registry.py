@@ -6,6 +6,7 @@ from ..config import ENABLED_STRATEGIES
 from .base import Strategy
 from .mtf_ema_rsi_adx import MtfEmaRsiAdxStrategy
 from .breakout import BreakoutStrategy
+from .scalping import Scalping5mStrategy
 
 
 def _env_for_strategy(prefix: str) -> Dict[str, Any]:
@@ -45,6 +46,7 @@ def load_strategies() -> List[Strategy]:
     registry = {
         "mtf_ema_rsi_adx": MtfEmaRsiAdxStrategy,
         "breakout": BreakoutStrategy,
+        "scalping": Scalping5mStrategy,
     }
     enabled = [s.lower() for s in (ENABLED_STRATEGIES or [])]
     if not enabled or any(s in ("auto", "all", "*") for s in enabled):
