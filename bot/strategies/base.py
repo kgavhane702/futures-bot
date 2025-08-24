@@ -24,9 +24,22 @@ class Decision:
 class Strategy:
     id: str = "base"
 
+    def __init__(self, cfg: Optional[Dict[str, Any]] = None):
+        # Per-strategy configuration with sensible defaults; registry populates from env
+        self.cfg: Dict[str, Any] = cfg or {}
+
     def required_timeframes(self) -> Dict[str, int]:
-        """Return { timeframe: lookback_bars } to fetch for this strategy."""
-        return {}
+        """Return { timeframe: lookback_bars } to fetch for this strategy.
+        Default: use per-strategy TIMEFRAME/HTF_TIMEFRAME with 400 lookback if provided.
+        """
+        tfs: Dict[str, int] = {}
+        tf = self.cfg.get("TIMEFRAME")
+        htf = self.cfg.get("HTF_TIMEFRAME")
+        if tf:
+            tfs[str(tf)] = int(self.cfg.get("LOOKBACK", 400))
+        if htf:
+            tfs[str(htf)] = int(self.cfg.get("HTF_LOOKBACK", self.cfg.get("LOOKBACK", 400)))
+        return tfs
 
     def prepare(self, data: Dict[str, Dict[str, pd.DataFrame]]):
         """Optional hook: called once per tick with all pre-fetched data by symbol and timeframe."""

@@ -55,6 +55,17 @@ Provide `.env` in the project root (not committed).
 - UI: `bot/ui/` (FastAPI + Jinja + vanilla JS)
   - Positions table shows `strategy`, `confidence`, and TP stage.
 
+### Per-strategy configuration (env)
+- Defaults live in `bot/strategies/config/<strategy_id>.json`.
+- Override per strategy via env namespace `STRAT_<ID>_...`.
+- Examples:
+  - `STRAT_MTF_EMA_RSI_ADX_TIMEFRAME=15m`
+  - `STRAT_MTF_EMA_RSI_ADX_RSI_LONG_MIN=50`
+  - `STRAT_BREAKOUT_TIMEFRAME=5m`
+  - `STRAT_BREAKOUT_VOL_MULT=2.0`
+- Precedence: file defaults < env overrides.
+- Global env covers exchange/API, risk caps, and operational toggles; strategy filters/timeframes are per-strategy.
+
 ## Secrets with Google Cloud Secret Manager (optional)
 - Enable by setting in `.env`:
   - `USE_GCP_SECRETS=true`

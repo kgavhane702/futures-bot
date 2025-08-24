@@ -2,16 +2,8 @@ from typing import Dict
 import pandas as pd
 
 from ..config import (
-    TIMEFRAME,
-    HTF_TIMEFRAME,
-    EMA_FAST,
-    EMA_SLOW,
-    RSI_PERIOD,
-    RSI_LONG_MIN,
-    RSI_SHORT_MAX,
-    ADX_PERIOD,
-    MIN_ADX,
     TARGET_SPLITS,
+    ALLOW_SHORTS,
 )
 from ..indicators import add_indicators, valid_row
 from .base import Strategy, Decision
@@ -21,8 +13,11 @@ class BreakoutStrategy(Strategy):
     id = "breakout"
 
     def required_timeframes(self) -> Dict[str, int]:
-        # Need enough bars to compute swings/indicators and volume averages
-        return {TIMEFRAME: 400, HTF_TIMEFRAME: 400}
+        # Use per-strategy timeframes if provided
+        return super().required_timeframes() or {
+            str(self.cfg.get("TIMEFRAME", "15m")): int(self.cfg.get("LOOKBACK", 400)),
+            str(self.cfg.get("HTF_TIMEFRAME", "1h")): int(self.cfg.get("HTF_LOOKBACK", self.cfg.get("LOOKBACK", 400))),
+        }
 
     def _swing_levels(self, df: pd.DataFrame, lookback: int = 50) -> Dict[str, float]:
         # Recent structural swing high/low within lookback window (excluding current forming bar)
@@ -44,8 +39,10 @@ class BreakoutStrategy(Strategy):
 
     def decide(self, symbol: str, data: Dict[str, pd.DataFrame]) -> Decision:
         # Prepare data with indicators
-        ltf_raw = data.get(TIMEFRAME)
-        htf_raw = data.get(HTF_TIMEFRAME)
+        tf = str(self.cfg.get("TIMEFRAME", "15m"))
+        htf = str(self.cfg.get("HTF_TIMEFRAME", "1h"))
+        ltf_raw = data.get(tf)
+        htf_raw = data.get(htf)
         if ltf_raw is None or htf_raw is None:
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
         min_len = 60
@@ -62,16 +59,19 @@ class BreakoutStrategy(Strategy):
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
 
         # HTF trend alignment + strength filter
-        htf_up = h["ema_fast"] > h["ema_slow"] and h["adx"] >= MIN_ADX
-        htf_down = h["ema_fast"] < h["ema_slow"] and h["adx"] >= MIN_ADX
+        min_adx = float(self.cfg.get("MIN_ADX", 18))
+        htf_up = h["ema_fast"] > h["ema_slow"] and h["adx"] >= min_adx
+        htf_down = h["ema_fast"] < h["ema_slow"] and h["adx"] >= min_adx
 
         # LTF momentum filter
-        ltf_mom_up = l["ema_fast"] > l["ema_slow"] and l["rsi"] >= RSI_LONG_MIN
-        ltf_mom_down = l["ema_fast"] < l["ema_slow"] and l["rsi"] <= RSI_SHORT_MAX
+        rsi_long_min = float(self.cfg.get("RSI_LONG_MIN", 52))
+        rsi_short_max = float(self.cfg.get("RSI_SHORT_MAX", 48))
+        ltf_mom_up = l["ema_fast"] > l["ema_slow"] and l["rsi"] >= rsi_long_min
+        ltf_mom_down = l["ema_fast"] < l["ema_slow"] and l["rsi"] <= rsi_short_max
 
         # Swing structure and volume confirmation
         swings = self._swing_levels(ltf, lookback=50)
-        vol_ok = self._volume_ok(ltf, mult=1.5)
+        vol_ok = self._volume_ok(ltf, mult=float(self.cfg.get("VOL_MULT", 1.5)))
         if not vol_ok:
             return Decision(symbol, self.id, None, 0.0, 0.0, None, None, None, None, {})
 
@@ -96,7 +96,7 @@ class BreakoutStrategy(Strategy):
                     initial_stop = entry - 1.5 * atr
 
         # Breakout short: close below recent swing low with filters
-        if side is None and htf_down and ltf_mom_down and swings.get("low") is not None:
+        if side is None and ALLOW_SHORTS and htf_down and ltf_mom_down and swings.get("low") is not None:
             if entry < float(swings["low"]):
                 side = "short"
                 # SL just beyond last swing high + ATR buffer
@@ -135,7 +135,7 @@ class BreakoutStrategy(Strategy):
         v_last = float(vol.iloc[-2])
         vol_surge = (v_last / max(1e-9, v_avg)) if v_avg > 0 else 0.0
         ema_gap = abs(l["ema_fast"] - l["ema_slow"]) / max(1e-9, abs(l["ema_slow"]))
-        adx_term = max(0.0, (l["adx"] - MIN_ADX) / 50.0)
+        adx_term = max(0.0, (l["adx"] - min_adx) / 50.0)
         score = float(ema_gap * 1000 + max(0.0, (vol_surge - 1.0)) * 100 + adx_term * 10)
         confidence = float(max(0.0, min(1.0, 0.4 * min(2.0, vol_surge) + 0.4 * adx_term + 0.2 * min(1.0, ema_gap))))
 
