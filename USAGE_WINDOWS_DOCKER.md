@@ -93,6 +93,23 @@ Notes:
 - Set `GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json`
 - Expose the UI on port 8000
 
+Create a `.dockerignore` file in the project root to exclude secrets and local files from the build context:
+```powershell
+@"
+.gitattributes
+.gitignore
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+gcp-key.json
+data/
+trades_futures.csv
+"@ | Set-Content .dockerignore
+```
+
 ### 7) Build and run
 Open PowerShell, cd to the project directory (e.g., `D:\futures-bot`) and run:
 ```powershell

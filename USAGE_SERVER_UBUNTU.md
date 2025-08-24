@@ -81,6 +81,23 @@ mkdir -p data
 ```
 
 ### 6) Run with Docker
+Create a `.dockerignore` to keep secrets and local files out of the build context:
+```bash
+cat > .dockerignore << 'EOF'
+.gitattributes
+.gitignore
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+gcp-key.json
+data/
+trades_futures.csv
+EOF
+```
+
 ```bash
 docker compose up --build -d
 docker compose ps
@@ -109,6 +126,28 @@ docker compose up --build -d
   - Secret names required:
     - `futures-bot-api-key-testnet`, `futures-bot-api-secret-testnet`
     - `futures-bot-api-key-mainnet`, `futures-bot-api-secret-mainnet`
+- Cannot create key file (Operation not permitted):
+  - Fix folder ownership/permissions, then create key and move it:
+  ```bash
+  sudo mkdir -p /home/<USER>/futures-bot
+  sudo chown -R <USER>:<USER> /home/<USER>/futures-bot
+  chmod 700 /home/<USER>/futures-bot
+
+  gcloud iam service-accounts keys create ~/gcp-key.json \
+    --iam-account futures-bot-sa@futures-bot-469715.iam.gserviceaccount.com
+
+  mv ~/gcp-key.json ~/futures-bot/gcp-key.json
+  chmod 600 ~/futures-bot/gcp-key.json
+  ```
+  - If still blocked, create in `/tmp` then move with sudo:
+  ```bash
+  gcloud iam service-accounts keys create /tmp/gcp-key.json \
+    --iam-account futures-bot-sa@futures-bot-469715.iam.gserviceaccount.com
+
+  sudo mv /tmp/gcp-key.json /home/<USER>/futures-bot/gcp-key.json
+  sudo chown <USER>:<USER> /home/<USER>/futures-bot/gcp-key.json
+  chmod 600 /home/<USER>/futures-bot/gcp-key.json
+  ```
 - Time sync: ensure server time is accurate (`timedatectl`), exchanges can reject skewed requests.
 - UI exposure: if public, consider putting a reverse proxy with basic auth and TLS in front of port 8000.
 

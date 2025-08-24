@@ -1,0 +1,12 @@
+.gitattributes
+.gitignore
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+gcp-key.json
+data/
+trades_futures.csv
+

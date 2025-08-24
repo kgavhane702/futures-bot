@@ -74,10 +74,36 @@ setx GOOGLE_APPLICATION_CREDENTIALS "$KEY_PATH"
 $env:GOOGLE_APPLICATION_CREDENTIALS = "$KEY_PATH"
 ```
 
+Troubleshooting key creation on Linux (permission denied):
+```bash
+# Ensure the target folder is owned by your user
+sudo mkdir -p /home/<USER>/futures-bot
+sudo chown -R <USER>:<USER> /home/<USER>/futures-bot
+chmod 700 /home/<USER>/futures-bot
+
+# Create the key in your home or /tmp, then move and set perms
+gcloud iam service-accounts keys create ~/gcp-key.json \
+  --iam-account futures-bot-sa@futures-bot-469715.iam.gserviceaccount.com
+mv ~/gcp-key.json ~/futures-bot/gcp-key.json
+chmod 600 ~/futures-bot/gcp-key.json
+```
+
 ### 6) Verify secret access
 ```powershell
 gcloud secrets versions access latest --secret=futures-bot-api-key-testnet | echo "OK testnet key"
 gcloud secrets versions access latest --secret=futures-bot-api-key-mainnet | echo "OK mainnet key"
+```
+
+Service account on GCE VM (no key file):
+```bash
+gcloud config set project futures-bot-469715
+gcloud config set compute/zone asia-south1-c
+gcloud compute instances stop future-bot --zone asia-south1-c
+gcloud compute instances set-service-account future-bot \
+  --zone asia-south1-c \
+  --service-account futures-bot-sa@futures-bot-469715.iam.gserviceaccount.com \
+  --scopes=https://www.googleapis.com/auth/cloud-platform
+gcloud compute instances start future-bot --zone asia-south1-c
 ```
 
 ### 7) Bot configuration (.env)
