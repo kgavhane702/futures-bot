@@ -42,6 +42,10 @@ def _file_cfg(strategy_id: str) -> Dict[str, Any]:
     return {}
 
 
+def available_strategy_ids() -> List[str]:
+    return sorted(["mtf_ema_rsi_adx", "breakout", "scalping"])
+
+
 def load_strategies() -> List[Strategy]:
     registry = {
         "mtf_ema_rsi_adx": MtfEmaRsiAdxStrategy,

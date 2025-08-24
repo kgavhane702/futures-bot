@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Settings</h2>
+  <form id="settings-form" class="form">
+    <div class="grid">
+      <label>Use Testnet
+        <select name="USE_TESTNET" id="USE_TESTNET">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>Dry Run
+        <select name="DRY_RUN" id="DRY_RUN">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>Leverage
+        <input type="number" name="LEVERAGE" id="LEVERAGE" min="1" max="25" step="1" />
+      </label>
+      <label>Universe Size
+        <input type="number" name="UNIVERSE_SIZE" id="UNIVERSE_SIZE" min="10" max="500" step="1" />
+      </label>
+      <label>Max Positions
+        <input type="number" name="MAX_POSITIONS" id="MAX_POSITIONS" min="1" max="10" step="1" />
+      </label>
+      <label>Strategies
+        <select multiple name="STRATEGIES" id="STRATEGIES" size="4"></select>
+        <div class="hint">Leave empty to use auto; Ctrl/Cmd-click to select multiple.</div>
+      </label>
+    </div>
+    <div class="actions">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <script src="/static/settings.js"></script>
+{% endblock %}
+
+

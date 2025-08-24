@@ -28,3 +28,8 @@ def docs_strategy(request: Request, strategy_id: str):
     return templates.TemplateResponse(tpl, {"request": request, "strategy_id": strategy_id})
 
 
+@router.get("/settings_ui", response_class=HTMLResponse)
+def settings_ui(request: Request):
+    return templates.TemplateResponse("settings.html", {"request": request})
+
+
