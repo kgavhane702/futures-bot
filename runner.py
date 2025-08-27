@@ -183,9 +183,17 @@ def run():
                 capacity = max(0, MAX_POSITIONS - len(open_syms))
                 selected = []
                 if capacity > 0:
-                    # First pass: pick best from each strategy (diversity) up to capacity
-                    # Order strategies by their best candidate rank
-                    ordered_sids = sorted(strat_to_ds.keys(), key=lambda s: _rank_key(strat_to_ds[s][0]), reverse=True)
+                    # First pass: give mtf_5m_high_conf explicit priority if present
+                    preferred = "mtf_5m_high_conf"
+                    if preferred in strat_to_ds and capacity > 0 and len(strat_to_ds[preferred]) > 0:
+                        selected.append(strat_to_ds[preferred][0])
+                        capacity -= 1
+                    # Then pick best from each remaining strategy (diversity)
+                    ordered_sids = sorted(
+                        [sid for sid in strat_to_ds.keys() if sid != preferred],
+                        key=lambda s: _rank_key(strat_to_ds[s][0]),
+                        reverse=True,
+                    )
                     for sid in ordered_sids:
                         if capacity <= 0:
                             break

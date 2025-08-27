@@ -228,23 +228,32 @@ def loop(ex):
                         log("[Monitor] all TPs filled; awaiting position closure", sym)
                         continue
                     if adj_sl is not None and pos.get("size", 0) > 0:
-                        # Cancel only SLs, keep TPs
+                        # Replace with a closePosition stop (reduceOnly + closePosition), so qty changes won't expire the SL
                         try:
-                            from ..orders import cancel_reduce_only_stop_orders
-                            cancel_reduce_only_stop_orders(ex, sym)
-                        except Exception:
-                            pass
-                        try:
+                            from ..orders import get_reduce_only_stop_orders
+                            # Place new first with closePosition; then cancel old SLs
                             side = "sell" if pos.get("side")=="long" else "buy"
-                            # Avoid immediate trigger
                             last = STATE.snapshot().get("prices", {}).get(sym)
                             if isinstance(last, (int, float)):
                                 if side == "sell" and adj_sl >= last:
                                     adj_sl = last * 0.999
                                 elif side == "buy" and adj_sl <= last:
                                     adj_sl = last * 1.001
-                            ex.create_order(sym, "STOP_MARKET", side, pos.get("size", 0), params={"reduceOnly": True, "stopPrice": float(adj_sl)})
-                            log("[Monitor] SL adjusted", sym, adj_sl)
+                            # New closePosition SL using mark price trigger
+                            try:
+                                ex.create_order(sym, "STOP_MARKET", side, None, params={"reduceOnly": True, "closePosition": True, "stopPrice": float(adj_sl), "workingType": "MARK_PRICE", "timeInForce": "GTE_GTC"})
+                                log("[Monitor] SL adjusted (closePosition)", sym, adj_sl)
+                            except Exception as e:
+                                log("[Monitor] SL adjust fail", sym, str(e))
+                            # Cancel any previous reduce-only STOPs
+                            try:
+                                for o in get_reduce_only_stop_orders(ex, sym):
+                                    try:
+                                        ex.cancel_order(o.get("id"), sym)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
                         except Exception as e:
                             log("[Monitor] SL adjust fail", sym, str(e))
                     try:
