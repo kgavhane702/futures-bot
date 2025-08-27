@@ -4,7 +4,7 @@
   "EMA_SLOW": 21,
   "RSI_LEN": 14,
   "ATR_LEN": 14,
-  "SL_INIT_PCT": 1.0,
+  "SL_INIT_PCT": 2.0,
   "REFRESH_SECONDS": 3,
   "TTL_SECONDS": 300,
   "TTL_MIN_PROFIT_PCT": 1.0,
