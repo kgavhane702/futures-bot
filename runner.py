@@ -39,11 +39,6 @@ from bot.workers import scalp1m_worker
 import threading
 import uvicorn
 from bot.ui.app import app as ui_app
-from bot.config import VERTEX_ENABLED, VERTEX_MODE, VERTEX_MIN_CONF
-try:
-    from bot.ai.vertex.client import VERTEX
-except Exception:
-    VERTEX = None
 
 
 def run():
@@ -167,35 +162,6 @@ def run():
                             data = {tf: df for tf, df in symbol_to_tf_data[sym].items() if df is not None}
                             d = s.decide(sym, data)
                             if d and d.side in ("long", "short"):
-                                # Optional Vertex AI confirmation/blend
-                                if VERTEX_ENABLED and VERTEX and VERTEX.ready:
-                                    inst = {
-                                        "symbol": sym,
-                                        "strategy": s.id,
-                                        "side": d.side,
-                                        "entry": float(d.entry_price or 0.0),
-                                        "atr": float(d.atr or 0.0),
-                                        "score": float(d.score or 0.0),
-                                        "confidence": float(d.confidence or 0.0),
-                                    }
-                                    vp = VERTEX.predict(inst) or {}
-                                    v_side = (vp.get("side") or "none").lower()
-                                    v_conf = float(vp.get("confidence") or 0.0)
-                                    if VERTEX_MODE == "confirm":
-                                        if v_side != d.side or v_conf < VERTEX_MIN_CONF:
-                                            d = None
-                                    elif VERTEX_MODE == "blend":
-                                        # Blend confidence (capped 0..1)
-                                        try:
-                                            d.confidence = max(0.0, min(1.0, 0.5 * (d.confidence or 0.0) + 0.5 * v_conf))
-                                            d.score = max(0.0, min(100.0, d.confidence * 100.0))
-                                        except Exception:
-                                            pass
-                                    else:
-                                        # signals mode: allow as-is (decision stands)
-                                        pass
-                                if not d:
-                                    continue
                                 decisions.append(d)
                         except Exception as e:
                             log("strategy decide fail", s.id, sym, str(e))
