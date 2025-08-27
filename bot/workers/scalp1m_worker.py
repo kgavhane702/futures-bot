@@ -40,23 +40,21 @@ class Scalp1mWorker:
         except Exception:
             return []
 
-    def _has_active_scapl_pos(self) -> bool:
+    def _active_scalp_count(self) -> int:
         try:
             poss = self.ex.fetch_positions()
         except Exception:
             poss = []
+        n = 0
         for p in poss:
             try:
                 amt = p.get("contracts") or p.get("positionAmt") or p.get("contractsAmount")
                 sz = float(amt or 0)
-                if abs(sz) > 0:
-                    # If this symbol is tracked by this worker as an entry, count it
-                    sym = p.get("symbol")
-                    if sym in self.entries:
-                        return True
+                if abs(sz) > 0 and p.get("symbol") in self.entries:
+                    n += 1
             except Exception:
                 pass
-        return False
+        return n
 
     def _symbol_has_any_position(self, sym: str) -> bool:
         try:
@@ -98,10 +96,16 @@ class Scalp1mWorker:
             avail = float((bal.get("USDT") or {}).get("free") or bal.get("free", 0) or 0)
         except Exception:
             avail = equity
-        max_notional = max(0.0, avail) * float(LEVERAGE) * float(SCALP1M_MARGIN_FRACTION)
+        raw_cap = max(0.0, avail) * float(LEVERAGE) * float(SCALP1M_MARGIN_FRACTION)
+        max_by_avail = max(0.0, avail) * float(LEVERAGE)
+        # Use at least $10 notional if 5% is below $10, but never exceed available*leverage
+        max_notional = min(max_by_avail, max(10.0, raw_cap))
         notional = qty * entry
         if notional > max_notional and entry > 0:
             qty = round_qty(self.ex, sym, max(0.0, max_notional / entry))
+        elif notional < 10.0 and entry > 0 and max_by_avail >= 10.0:
+            # Bump up to minimum $10 notional if capacity allows
+            qty = round_qty(self.ex, sym, 10.0 / entry)
         qty = round_qty(self.ex, sym, qty)
         if qty <= 0:
             return
@@ -275,7 +279,8 @@ class Scalp1mWorker:
                 # Universe
                 universe = self._universe()
                 # Capacity: at most 1 scalp position
-                if not self._has_active_scapl_pos() and not self._placing:
+                from ..config import SCALP1M_MAX_POSITIONS
+                if (self._active_scalp_count() < SCALP1M_MAX_POSITIONS) and not self._placing:
                     # Try to find an entry over the universe (first hit wins)
                     for sym in universe:
                         # Skip blacklisted
@@ -289,7 +294,7 @@ class Scalp1mWorker:
                         self._placing = True
                         self._place_entry(sym)
                         self._placing = False
-                        if self._has_active_scapl_pos():
+                        if self._active_scalp_count() >= SCALP1M_MAX_POSITIONS:
                             break
                 else:
                     # Ensure flag resets if capacity is filled

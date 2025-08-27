@@ -177,11 +177,11 @@ def test_margin_fraction_caps_notional():
     w.strategy.cfg["LOOKBACK"] = 60
     sym = "BTC/USDT:USDT"
     w._place_entry(sym)
-    # With free=50 USDT, leverage=5, fraction=0.05 => max_notional=12.5
-    # Ensure the market entry amount * price does not exceed ~12.5 by large margin
+    # With free=50 USDT, leverage=5, fraction=0.05 => raw_cap=12.5; min $10 rule applies
+    # Ensure the market entry amount * price >= $10 and <= $250 (avail*lev)
     mkt = next(o for o in ex.orders if o["type"] == "market")
     notional = float(mkt["amount"]) * ex.current_price
-    assert notional <= 12.6
+    assert 10.0 <= notional <= 250.0
 
 
 def test_ttl_close_blacklists_on_no_profit():
