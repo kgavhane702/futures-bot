@@ -228,10 +228,19 @@ def loop(ex):
                         log("[Monitor] all TPs filled; awaiting position closure", sym)
                         continue
                     if adj_sl is not None and pos.get("size", 0) > 0:
-                        # Replace with a closePosition stop (reduceOnly + closePosition), so qty changes won't expire the SL
+                        # Cancel existing reduce-only STOPs first, then place a new closePosition SL
                         try:
-                            from ..orders import get_reduce_only_stop_orders
-                            # Place new first with closePosition; then cancel old SLs
+                            try:
+                                old_orders = ex.fetch_open_orders(sym)
+                            except Exception:
+                                old_orders = []
+                            for o in old_orders:
+                                try:
+                                    if o.get("reduceOnly") and "STOP" in (o.get("type", "").upper()):
+                                        ex.cancel_order(o.get("id"), sym)
+                                        log("[Monitor] cancelled old SL", sym, o.get("id"))
+                                except Exception:
+                                    pass
                             side = "sell" if pos.get("side")=="long" else "buy"
                             last = STATE.snapshot().get("prices", {}).get(sym)
                             if isinstance(last, (int, float)):
@@ -239,21 +248,20 @@ def loop(ex):
                                     adj_sl = last * 0.999
                                 elif side == "buy" and adj_sl <= last:
                                     adj_sl = last * 1.001
-                            # New closePosition SL using mark price trigger
-                            try:
-                                ex.create_order(sym, "STOP_MARKET", side, None, params={"reduceOnly": True, "closePosition": True, "stopPrice": float(adj_sl), "workingType": "MARK_PRICE", "timeInForce": "GTE_GTC"})
-                                log("[Monitor] SL adjusted (closePosition)", sym, adj_sl)
-                            except Exception as e:
-                                log("[Monitor] SL adjust fail", sym, str(e))
-                            # Cancel any previous reduce-only STOPs
-                            try:
-                                for o in get_reduce_only_stop_orders(ex, sym):
-                                    try:
-                                        ex.cancel_order(o.get("id"), sym)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
+                            ex.create_order(
+                                sym,
+                                "STOP_MARKET",
+                                side,
+                                None,
+                                params={
+                                    "reduceOnly": True,
+                                    "closePosition": True,
+                                    "stopPrice": float(adj_sl),
+                                    "workingType": "MARK_PRICE",
+                                    "timeInForce": "GTE_GTC",
+                                },
+                            )
+                            log("[Monitor] SL adjusted (closePosition)", sym, adj_sl)
                         except Exception as e:
                             log("[Monitor] SL adjust fail", sym, str(e))
                     try:
