@@ -1,0 +1,20 @@
+{
+  "BASE_TF": "5m",
+  "TREND_TF": "15m",
+  "HTF_TF": "1h",
+  "LOOKBACK": 400,
+  "EMA_FAST": 20,
+  "EMA_SLOW": 50,
+  "RSI_LEN": 14,
+  "ADX_LEN": 14,
+  "ATR_LEN": 14,
+  "MIN_ADX": 20,
+  "RSI_LONG_MIN": 58,
+  "RSI_SHORT_MAX": 42,
+  "BODY_MIN": 0.65,
+  "LOOKBACK_SWINGS": 30,
+  "SL_BUFFER_ATR": 0.25,
+  "MIN_RR": 2.0,
+  "CONF_MIN": 0.8
+}
+

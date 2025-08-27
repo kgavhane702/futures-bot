@@ -7,6 +7,7 @@ from .base import Strategy
 from .mtf_ema_rsi_adx import MtfEmaRsiAdxStrategy
 from .breakout import BreakoutStrategy
 from .scalping import Scalping5mStrategy
+from .mtf_5m_high_conf import Mtf5mHighConfStrategy
 
 
 def _env_for_strategy(prefix: str) -> Dict[str, Any]:
@@ -43,7 +44,7 @@ def _file_cfg(strategy_id: str) -> Dict[str, Any]:
 
 
 def available_strategy_ids() -> List[str]:
-    return sorted(["mtf_ema_rsi_adx", "breakout", "scalping"])
+    return sorted(["mtf_ema_rsi_adx", "breakout", "scalping", "mtf_5m_high_conf"])
 
 
 def load_strategies() -> List[Strategy]:
@@ -51,6 +52,7 @@ def load_strategies() -> List[Strategy]:
         "mtf_ema_rsi_adx": MtfEmaRsiAdxStrategy,
         "breakout": BreakoutStrategy,
         "scalping": Scalping5mStrategy,
+        "mtf_5m_high_conf": Mtf5mHighConfStrategy,
     }
     enabled = [s.lower() for s in (ENABLED_STRATEGIES or [])]
     if not enabled or any(s in ("auto", "all", "*") for s in enabled):
