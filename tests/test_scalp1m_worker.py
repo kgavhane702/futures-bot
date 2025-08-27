@@ -111,7 +111,7 @@ def test_entry_sets_leverage_and_initial_sl():
     w._place_entry(sym)
 
     # leverage 5x isolated applied
-    assert (sym, 5) in ex.leverage_set
+    assert (sym, 10) in ex.leverage_set
     assert (sym, "isolated") in ex.margin_mode_set
 
     # orders: market entry and a closePosition SL
@@ -177,11 +177,11 @@ def test_margin_fraction_caps_notional():
     w.strategy.cfg["LOOKBACK"] = 60
     sym = "BTC/USDT:USDT"
     w._place_entry(sym)
-    # With free=50 USDT, leverage=5, fraction=0.05 => raw_cap=12.5; min $10 rule applies
-    # Ensure the market entry amount * price >= $10 and <= $250 (avail*lev)
+    # With free=50 USDT, leverage=10 (scalp), fraction=0.05 => raw_cap=25; min $10 rule applies
+    # Ensure the market entry amount * price >= $10 and <= $500 (avail*lev)
     mkt = next(o for o in ex.orders if o["type"] == "market")
     notional = float(mkt["amount"]) * ex.current_price
-    assert 10.0 <= notional <= 250.0
+    assert 10.0 <= notional <= 500.0
 
 
 def test_ttl_close_blacklists_on_no_profit():

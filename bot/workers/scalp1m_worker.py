@@ -85,19 +85,19 @@ class Scalp1mWorker:
         stop = float(dec.initial_stop)
         entry = float(dec.entry_price)
         qty = size_position(entry, stop, equity)
-        # Cap by available margin * LEVERAGE * SCALP1M_MARGIN_FRACTION
+        # Cap by available margin * SCALP1M_LEVERAGE * SCALP1M_MARGIN_FRACTION
         try:
-            from ..config import LEVERAGE, SCALP1M_MARGIN_FRACTION
+            from ..config import SCALP1M_LEVERAGE as LEV_CAP, SCALP1M_MARGIN_FRACTION
         except Exception:
-            LEVERAGE, SCALP1M_MARGIN_FRACTION = 5, 0.05
+            LEV_CAP, SCALP1M_MARGIN_FRACTION = 10, 0.05
         try:
             # Attempt to read available balance (free collateral)
             bal = self.ex.fetch_balance()
             avail = float((bal.get("USDT") or {}).get("free") or bal.get("free", 0) or 0)
         except Exception:
             avail = equity
-        raw_cap = max(0.0, avail) * float(LEVERAGE) * float(SCALP1M_MARGIN_FRACTION)
-        max_by_avail = max(0.0, avail) * float(LEVERAGE)
+        raw_cap = max(0.0, avail) * float(LEV_CAP) * float(SCALP1M_MARGIN_FRACTION)
+        max_by_avail = max(0.0, avail) * float(LEV_CAP)
         # Use at least $10 notional if 5% is below $10, but never exceed available*leverage
         max_notional = min(max_by_avail, max(10.0, raw_cap))
         notional = qty * entry
@@ -114,10 +114,14 @@ class Scalp1mWorker:
         from ..config import MIN_NOTIONAL_USDT
         if notional < MIN_NOTIONAL_USDT:
             return
-        # Set leverage 5x and isolated margin for this symbol
+        # Set leverage (scalp-specific) and isolated margin for this symbol
+        try:
+            from ..config import SCALP1M_LEVERAGE
+        except Exception:
+            SCALP1M_LEVERAGE = 10
         try:
             if hasattr(self.ex, "set_leverage"):
-                self.ex.set_leverage(5, symbol=sym)
+                self.ex.set_leverage(SCALP1M_LEVERAGE, symbol=sym)
         except Exception:
             pass
         try:

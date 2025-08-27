@@ -126,6 +126,7 @@ SCALP1M_REFRESH_SECONDS = int(os.getenv("SCALP1M_REFRESH_SECONDS", "3"))
 SCALP1M_MAX_POSITIONS = int(os.getenv("SCALP1M_MAX_POSITIONS", "5"))
 SCALP1M_BLACKLIST_HOURS = float(os.getenv("SCALP1M_BLACKLIST_HOURS", "2"))
 SCALP1M_MARGIN_FRACTION = float(os.getenv("SCALP1M_MARGIN_FRACTION", "0.05"))  # 5% of available margin
+SCALP1M_LEVERAGE = int(os.getenv("SCALP1M_LEVERAGE", "10"))
 
 # Disable orchestrator entries when focusing only on scalp_1m
 NON_SCALP_ENABLED   = os.getenv("NON_SCALP_ENABLED", "true").lower() == "true"
