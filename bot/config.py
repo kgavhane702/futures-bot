@@ -90,6 +90,14 @@ def _parse_splits(raw: str):
 
 TARGET_SPLITS      = _parse_splits(TARGET_SPLITS_RAW)
 
+# ==== Vertex AI gating (optional) ====
+VERTEX_ENABLED     = os.getenv("VERTEX_ENABLED", "false").lower() == "true"
+VERTEX_MODE        = os.getenv("VERTEX_MODE", "confirm").strip()  # confirm|signals|blend
+VERTEX_MIN_CONF    = float(os.getenv("VERTEX_MIN_CONF", "0.70"))
+VERTEX_ENDPOINT_ID = os.getenv("VERTEX_ENDPOINT_ID", "").strip()
+VERTEX_LOCATION    = os.getenv("VERTEX_LOCATION", "us-central1").strip()
+VERTEX_PROJECT     = os.getenv("VERTEX_PROJECT", GCP_PROJECT).strip()
+
 # ==== Signal Settings ====
 EMA_FAST           = int(os.getenv("EMA_FAST", "50"))
 EMA_SLOW           = int(os.getenv("EMA_SLOW", "200"))

@@ -7,4 +7,5 @@ fastapi
 uvicorn
 jinja2
 google-cloud-secret-manager
+google-cloud-aiplatform
 pytest
