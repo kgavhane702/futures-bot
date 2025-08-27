@@ -6,7 +6,8 @@
   "ATR_LEN": 14,
   "SL_INIT_PCT": 1.0,
   "REFRESH_SECONDS": 3,
-  "TTL_SECONDS": 600,
+  "TTL_SECONDS": 300,
+  "TTL_MIN_PROFIT_PCT": 1.0,
   "TRAIL_LEVELS": [
     { "pnl_pct": 0.5, "sl_pct": -0.3 },
     { "pnl_pct": 0.8, "sl_pct": 0.0 },

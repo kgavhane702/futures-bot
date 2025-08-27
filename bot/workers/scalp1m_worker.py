@@ -29,6 +29,7 @@ class Scalp1mWorker:
         self.strategy = Scalp1mTrailStrategy(_file_cfg("scalp_1m_trail"))
         self.blacklist_until = {}  # symbol -> epoch seconds
         self.entries = {}  # symbol -> {time, entry}
+        self._placing = False  # guard against concurrent placements per loop
 
     def _is_enabled(self) -> bool:
         return SCALP1M_ENABLED
@@ -57,6 +58,21 @@ class Scalp1mWorker:
                 pass
         return False
 
+    def _symbol_has_any_position(self, sym: str) -> bool:
+        try:
+            poss = self.ex.fetch_positions()
+        except Exception:
+            poss = []
+        for p in poss:
+            try:
+                if p.get("symbol") == sym:
+                    amt = p.get("contracts") or p.get("positionAmt") or p.get("contractsAmount")
+                    if abs(float(amt or 0)) > 0:
+                        return True
+            except Exception:
+                continue
+        return False
+
     def _place_entry(self, sym: str):
         # Fetch 1m data
         try:
@@ -66,11 +82,26 @@ class Scalp1mWorker:
         dec = self.strategy.decide(sym, d)
         if not dec or dec.side not in ("long", "short") or dec.initial_stop is None or dec.entry_price is None:
             return
-        # Risk sizing
+        # Risk sizing with available margin cap
         equity = equity_from_balance(self.ex)
         stop = float(dec.initial_stop)
         entry = float(dec.entry_price)
         qty = size_position(entry, stop, equity)
+        # Cap by available margin * LEVERAGE * SCALP1M_MARGIN_FRACTION
+        try:
+            from ..config import LEVERAGE, SCALP1M_MARGIN_FRACTION
+        except Exception:
+            LEVERAGE, SCALP1M_MARGIN_FRACTION = 5, 0.05
+        try:
+            # Attempt to read available balance (free collateral)
+            bal = self.ex.fetch_balance()
+            avail = float((bal.get("USDT") or {}).get("free") or bal.get("free", 0) or 0)
+        except Exception:
+            avail = equity
+        max_notional = max(0.0, avail) * float(LEVERAGE) * float(SCALP1M_MARGIN_FRACTION)
+        notional = qty * entry
+        if notional > max_notional and entry > 0:
+            qty = round_qty(self.ex, sym, max(0.0, max_notional / entry))
         qty = round_qty(self.ex, sym, qty)
         if qty <= 0:
             return
@@ -90,16 +121,6 @@ class Scalp1mWorker:
                 self.ex.set_margin_mode("isolated", symbol=sym)
         except Exception:
             pass
-        # Cancel any reduce-only orders lingering
-        try:
-            for o in get_open_orders(self.ex, sym):
-                if o.get("reduceOnly"):
-                    try:
-                        self.ex.cancel_order(o.get("id"), sym)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
         # Entry
         side = "buy" if dec.side == "long" else "sell"
         try:
@@ -111,12 +132,14 @@ class Scalp1mWorker:
         # Place initial closePosition SL
         try:
             sl_side = "sell" if dec.side == "long" else "buy"
+            cid = f"scalp1m-sl-{int(time.time()*1000)}"
             self.ex.create_order(sym, "STOP_MARKET", sl_side, None, params={
-                "reduceOnly": True,
+                # reduceOnly is redundant with closePosition on Binance and causes -1106
                 "closePosition": True,
                 "stopPrice": float(stop),
                 "workingType": "MARK_PRICE",
                 "timeInForce": "GTE_GTC",
+                "newClientOrderId": cid,
             })
             slog("SL placed", sym, float(stop))
             self.entries[sym] = {"time": time.time(), "entry": float(entry)}
@@ -126,6 +149,7 @@ class Scalp1mWorker:
                     "entry": float(entry),
                     "qty": float(qty),
                     "initial_stop": float(stop),
+                    "client_tag": cid,
                 })
                 STATE.mark_entry(sym)
             except Exception:
@@ -158,7 +182,8 @@ class Scalp1mWorker:
         if pnl is None:
             return
         # Time stop if no profit within TTL
-        if (now - float(meta.get("time", now))) >= ttl and pnl <= 0.0:
+        min_pct = float(self.strategy.cfg.get("TTL_MIN_PROFIT_PCT", 1.0))
+        if (now - float(meta.get("time", now))) >= ttl and pnl < min_pct:
             try:
                 # Market close reduceOnly
                 poss = self.ex.fetch_positions()
@@ -215,20 +240,27 @@ class Scalp1mWorker:
             orders = self.ex.fetch_open_orders(sym)
         except Exception:
             orders = []
+        # Cancel only our own prior SLs: match clientOrderId tag when present
+        our_tag_prefix = "scalp1m-sl-"
         for o in orders:
             try:
-                if o.get("reduceOnly") and "STOP" in (o.get("type", "").upper()):
+                if not (o.get("reduceOnly") and "STOP" in (o.get("type", "").upper())):
+                    continue
+                # try to read client id from standardized field or raw info
+                coid = o.get("clientOrderId") or (o.get("info", {}) or {}).get("clientOrderId") or ""
+                if str(coid).startswith(our_tag_prefix):
                     self.ex.cancel_order(o.get("id"), sym)
             except Exception:
                 pass
         try:
             opp = "sell" if side == "long" else "buy"
+            cid2 = f"scalp1m-sl-{int(time.time()*1000)}"
             self.ex.create_order(sym, "STOP_MARKET", opp, None, params={
-                "reduceOnly": True,
                 "closePosition": True,
                 "stopPrice": float(new_sl),
                 "workingType": "MARK_PRICE",
                 "timeInForce": "GTE_GTC",
+                "newClientOrderId": cid2,
             })
             slog("trail SL", sym, round(new_sl, 8), f"pnl={round(pnl,3)}%")
         except Exception as e:
@@ -243,16 +275,25 @@ class Scalp1mWorker:
                 # Universe
                 universe = self._universe()
                 # Capacity: at most 1 scalp position
-                if not self._has_active_scapl_pos():
+                if not self._has_active_scapl_pos() and not self._placing:
                     # Try to find an entry over the universe (first hit wins)
                     for sym in universe:
                         # Skip blacklisted
                         until = float(self.blacklist_until.get(sym, 0.0) or 0.0)
                         if until and time.time() < until:
                             continue
+                        # Skip if any position already exists on this symbol (do not interfere)
+                        if self._symbol_has_any_position(sym):
+                            continue
+                        # place
+                        self._placing = True
                         self._place_entry(sym)
+                        self._placing = False
                         if self._has_active_scapl_pos():
                             break
+                else:
+                    # Ensure flag resets if capacity is filled
+                    self._placing = False
                 # Trail SL for active scalp entries
                 for sym in list(self.entries.keys()):
                     self._trail_for_symbol(sym)

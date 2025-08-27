@@ -123,8 +123,12 @@ SCAN_WHEN_FLAT_SECONDS = int(os.getenv("SCAN_WHEN_FLAT_SECONDS", "10"))
 SCALP1M_ENABLED = os.getenv("SCALP1M_ENABLED", "false").lower() == "true"
 SCALP1M_UNIVERSE_SIZE = int(os.getenv("SCALP1M_UNIVERSE_SIZE", "200"))
 SCALP1M_REFRESH_SECONDS = int(os.getenv("SCALP1M_REFRESH_SECONDS", "3"))
-SCALP1M_MAX_POSITIONS = int(os.getenv("SCALP1M_MAX_POSITIONS", "1"))
+SCALP1M_MAX_POSITIONS = int(os.getenv("SCALP1M_MAX_POSITIONS", "5"))
 SCALP1M_BLACKLIST_HOURS = float(os.getenv("SCALP1M_BLACKLIST_HOURS", "2"))
+SCALP1M_MARGIN_FRACTION = float(os.getenv("SCALP1M_MARGIN_FRACTION", "0.05"))  # 5% of available margin
+
+# Disable orchestrator entries when focusing only on scalp_1m
+NON_SCALP_ENABLED   = os.getenv("NON_SCALP_ENABLED", "true").lower() == "true"
 
 # ==== Timezone / Helpers ====
 TIMEZONE_CFG       = os.getenv("TIMEZONE", "indian").strip().lower()

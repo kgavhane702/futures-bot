@@ -20,6 +20,7 @@ from bot.config import (
     ORPHAN_PROTECT_SECONDS,
     ORPHAN_MIN_AGE_SECONDS,
     SCAN_WHEN_FLAT_SECONDS,
+    NON_SCALP_ENABLED,
 )
 from bot.utils import log
 from bot.state import STATE
@@ -128,7 +129,7 @@ def run():
                 should_flat_scan = True
                 last_flat_scan_ts = now_ts
 
-            if new_candle or should_flat_scan:
+            if NON_SCALP_ENABLED and (new_candle or should_flat_scan):
                 # Strategy-based scan (reuse loaded strategies)
                 # Prefetch data per symbol/timeframe for strategies' needs
                 symbol_to_tf_data = {}

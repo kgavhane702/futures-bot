@@ -60,6 +60,7 @@ class MockExchange:
             "price": float(price or 0) if price else None,
             "params": dict(params),
             "id": f"mock-{len(self.orders)+1}",
+            "clientOrderId": params.get("newClientOrderId"),
         }
         self.orders.append(order)
         if type == "market" and not params.get("reduceOnly"):
@@ -97,6 +98,10 @@ class MockExchange:
             },
         }
 
+    def fetch_balance(self):
+        # Provide a small free balance to test margin fraction cap
+        return {"USDT": {"free": 50.0}, "free": 50.0}
+
 
 def test_entry_sets_leverage_and_initial_sl():
     ex = MockExchange()
@@ -131,6 +136,52 @@ def test_trailing_replaces_sl_when_profit_grows():
     assert len(stops) >= 2
     # last stopPrice should be higher than the first for long
     assert float(stops[-1]["params"]["stopPrice"]) > float(stops[0]["params"]["stopPrice"])
+
+
+def test_does_not_cancel_non_scalp_orders():
+    ex = MockExchange()
+    ex.load_markets()
+    w = Scalp1mWorker(ex)
+    sym = "BTC/USDT:USDT"
+    # Pre-place a non-scalp reduceOnly STOP order
+    ex.create_order(sym, type="STOP_MARKET", side="sell", amount=0.001, params={"reduceOnly": True, "stopPrice": 90.0, "newClientOrderId": "other-strat-123"})
+    # Place scalp entry (this will place its own SL)
+    w._place_entry(sym)
+    # Trail once (this will cancel only our own tag)
+    ex.current_price *= 1.02
+    w._trail_for_symbol(sym)
+    # Ensure the non-scalp order is still present (not closed)
+    other = [o for o in ex.orders if (o.get("clientOrderId") == "other-strat-123") and not o.get("closed")]
+    assert len(other) == 1
+
+
+def test_skip_symbols_with_existing_positions():
+    ex = MockExchange()
+    ex.load_markets()
+    w = Scalp1mWorker(ex)
+    sym = "BTC/USDT:USDT"
+    # Simulate an existing non-scalp position on symbol
+    ex._positions = [{"symbol": sym, "contracts": 1.0, "side": "long"}]
+    w.loop_iterations = 0
+    # Try one placement attempt directly
+    w._place_entry(sym)  # should place normally if we call directly
+    # But in real loop, it will skip because position exists; emulate via helper
+    assert w._symbol_has_any_position(sym) is True
+
+
+def test_margin_fraction_caps_notional():
+    ex = MockExchange()
+    ex.load_markets()
+    w = Scalp1mWorker(ex)
+    # Override strategy cfg to make entry=100 stop=99 (1% risk) so raw qty equals equity risk sizing
+    w.strategy.cfg["LOOKBACK"] = 60
+    sym = "BTC/USDT:USDT"
+    w._place_entry(sym)
+    # With free=50 USDT, leverage=5, fraction=0.05 => max_notional=12.5
+    # Ensure the market entry amount * price does not exceed ~12.5 by large margin
+    mkt = next(o for o in ex.orders if o["type"] == "market")
+    notional = float(mkt["amount"]) * ex.current_price
+    assert notional <= 12.6
 
 
 def test_ttl_close_blacklists_on_no_profit():
