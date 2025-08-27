@@ -54,6 +54,13 @@ def run():
         log("Enabled strategies:", ", ".join(s.id for s in strategies))
     except Exception:
         pass
+    try:
+        if VERTEX_ENABLED:
+            log("[Vertex] enabled", VERTEX_MODE, f"min_conf={VERTEX_MIN_CONF}")
+        else:
+            log("[Vertex] disabled")
+    except Exception:
+        pass
     last_candle_time = None
     last_flat_scan_ts = 0.0
 
@@ -183,17 +190,33 @@ def run():
                                     v_conf = float(vp.get("confidence") or 0.0)
                                     if VERTEX_MODE == "confirm":
                                         if v_side != d.side or v_conf < VERTEX_MIN_CONF:
+                                            try:
+                                                log("[Vertex] block", sym, s.id, "ours:", d.side, round(d.confidence or 0.0,3), "ai:", v_side, round(v_conf,3))
+                                            except Exception:
+                                                pass
                                             d = None
+                                        else:
+                                            try:
+                                                log("[Vertex] allow", sym, s.id, v_side, round(v_conf,3))
+                                            except Exception:
+                                                pass
                                     elif VERTEX_MODE == "blend":
                                         # Blend confidence (capped 0..1)
                                         try:
                                             d.confidence = max(0.0, min(1.0, 0.5 * (d.confidence or 0.0) + 0.5 * v_conf))
                                             d.score = max(0.0, min(100.0, d.confidence * 100.0))
+                                            try:
+                                                log("[Vertex] blend", sym, s.id, "ai_conf=", round(v_conf,3), "new_conf=", round(d.confidence,3))
+                                            except Exception:
+                                                pass
                                         except Exception:
                                             pass
                                     else:
                                         # signals mode: allow as-is (decision stands)
-                                        pass
+                                        try:
+                                            log("[Vertex] signals", sym, s.id, v_side, round(v_conf,3))
+                                        except Exception:
+                                            pass
                                 if not d:
                                     continue
                                 decisions.append(d)
