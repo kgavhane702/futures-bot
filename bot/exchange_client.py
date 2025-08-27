@@ -13,11 +13,19 @@ def exchange():
         "options": {
             "defaultType": "future",
             "adjustForTimeDifference": True,
+            # Increase recvWindow to tolerate minor local clock/network delays
+            "recvWindow": 10000,
         },
     })
     try:
         ex.set_sandbox_mode(USE_TESTNET)
         log("Sandbox mode:", USE_TESTNET)
+    except Exception:
+        pass
+    # Proactively sync time difference to reduce -1021 InvalidNonce errors
+    try:
+        if hasattr(ex, "load_time_difference"):
+            _ = ex.load_time_difference()
     except Exception:
         pass
     return ex
