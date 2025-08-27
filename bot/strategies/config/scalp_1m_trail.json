@@ -1,0 +1,19 @@
+{
+  "LOOKBACK": 300,
+  "EMA_FAST": 9,
+  "EMA_SLOW": 21,
+  "RSI_LEN": 14,
+  "ATR_LEN": 14,
+  "SL_INIT_PCT": 1.0,
+  "REFRESH_SECONDS": 3,
+  "TTL_SECONDS": 600,
+  "TRAIL_LEVELS": [
+    { "pnl_pct": 0.5, "sl_pct": -0.3 },
+    { "pnl_pct": 0.8, "sl_pct": 0.0 },
+    { "pnl_pct": 1.2, "sl_pct": 0.4 },
+    { "pnl_pct": 1.8, "sl_pct": 0.8 },
+    { "pnl_pct": 2.5, "sl_pct": 1.5 }
+  ],
+  "MAX_SPREAD_PCT": 0.10
+}
+

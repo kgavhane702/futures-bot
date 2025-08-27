@@ -119,6 +119,13 @@ ORPHAN_MIN_AGE_SECONDS = int(os.getenv("ORPHAN_MIN_AGE_SECONDS", "60"))
 UNIVERSE_MONITOR_SECONDS = int(os.getenv("UNIVERSE_MONITOR_SECONDS", "2"))
 SCAN_WHEN_FLAT_SECONDS = int(os.getenv("SCAN_WHEN_FLAT_SECONDS", "10"))
 
+# Scalp 1m dedicated worker
+SCALP1M_ENABLED = os.getenv("SCALP1M_ENABLED", "false").lower() == "true"
+SCALP1M_UNIVERSE_SIZE = int(os.getenv("SCALP1M_UNIVERSE_SIZE", "200"))
+SCALP1M_REFRESH_SECONDS = int(os.getenv("SCALP1M_REFRESH_SECONDS", "3"))
+SCALP1M_MAX_POSITIONS = int(os.getenv("SCALP1M_MAX_POSITIONS", "1"))
+SCALP1M_BLACKLIST_HOURS = float(os.getenv("SCALP1M_BLACKLIST_HOURS", "2"))
+
 # ==== Timezone / Helpers ====
 TIMEZONE_CFG       = os.getenv("TIMEZONE", "indian").strip().lower()
 

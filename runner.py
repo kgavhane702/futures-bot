@@ -34,6 +34,7 @@ from bot.positions import get_open_positions, wait_for_position_visible
 from bot.storage import write_trade
 from bot.workers import pnl_worker
 from bot.workers import monitor_worker
+from bot.workers import scalp1m_worker
 import threading
 import uvicorn
 from bot.ui.app import app as ui_app
@@ -52,6 +53,11 @@ def run():
 
     # Background workers (read-only) — unified monitor + pnl
     monitor_worker.start(ex)
+    try:
+        scalp1m_worker.start(ex)
+        log("scalp_1m_trail worker started")
+    except Exception:
+        pass
     pnl_worker.start(ex, lambda: get_open_positions(ex), lambda: universe if 'universe' in locals() else [])
 
     # Start UI server (non-blocking) inside same process
@@ -86,6 +92,8 @@ def run():
             # Existing positions
             open_pos = get_open_positions(ex)
             open_syms = set(open_pos.keys())
+            # Exclude scalp_1m_trail positions from the global capacity count
+            core_open_syms = {s for s in open_syms if (STATE.get_strategy_meta(s) or {}).get("strategy") != "scalp_1m_trail"}
             log("[Orchestrator] Open positions:", open_pos)
 
             # Phase 2: Reconcile exits for existing positions
@@ -115,7 +123,7 @@ def run():
             # Scan + act on new candle, OR do a lightweight scan if under capacity for too long
             should_flat_scan = False
             now_ts = time.time()
-            capacity_remaining = max(0, MAX_POSITIONS - len(open_syms))
+            capacity_remaining = max(0, MAX_POSITIONS - len(core_open_syms))
             if not new_candle and capacity_remaining > 0 and (now_ts - last_flat_scan_ts) >= SCAN_WHEN_FLAT_SECONDS:
                 should_flat_scan = True
                 last_flat_scan_ts = now_ts
@@ -180,7 +188,7 @@ def run():
                 for sid in strat_to_ds:
                     strat_to_ds[sid].sort(key=_rank_key, reverse=True)
 
-                capacity = max(0, MAX_POSITIONS - len(open_syms))
+                capacity = max(0, MAX_POSITIONS - len(core_open_syms))
                 selected = []
                 if capacity > 0:
                     # First pass: give mtf_5m_high_conf explicit priority if present
@@ -229,7 +237,7 @@ def run():
                     sym, side_sig, entry_price, atr = d.symbol, d.side, d.entry_price, d.atr
                     if sym in open_syms:
                         continue
-                    if placed >= max(0, MAX_POSITIONS - len(open_syms)):
+                    if placed >= max(0, MAX_POSITIONS - len(core_open_syms)):
                         break
                     if atr is None or atr <= 0 or entry_price is None:
                         continue
