@@ -228,7 +228,7 @@ def loop(ex):
                         log("[Monitor] all TPs filled; awaiting position closure", sym)
                         continue
                     if adj_sl is not None and pos.get("size", 0) > 0:
-                        # Cancel existing reduce-only STOPs first, then place a new closePosition SL
+                        # Cancel existing STOP SLs (reduceOnly or closePosition), then place a new closePosition SL
                         try:
                             try:
                                 old_orders = ex.fetch_open_orders(sym)
@@ -236,7 +236,14 @@ def loop(ex):
                                 old_orders = []
                             for o in old_orders:
                                 try:
-                                    if o.get("reduceOnly") and "STOP" in (o.get("type", "").upper()):
+                                    t_upper = (o.get("type") or "").upper()
+                                    is_stop = "STOP" in t_upper
+                                    ro = bool(o.get("reduceOnly"))
+                                    # Some exchanges expose closePosition under params or info
+                                    info = o.get("info", {}) or {}
+                                    params = o.get("params", {}) or {}
+                                    cp = bool(o.get("closePosition") or params.get("closePosition") or info.get("closePosition"))
+                                    if is_stop and (ro or cp):
                                         ex.cancel_order(o.get("id"), sym)
                                         log("[Monitor] cancelled old SL", sym, o.get("id"))
                                 except Exception:
@@ -254,7 +261,7 @@ def loop(ex):
                                 side,
                                 None,
                                 params={
-                                    "reduceOnly": True,
+                                    # Do NOT send reduceOnly with closePosition on Binance (-1106)
                                     "closePosition": True,
                                     "stopPrice": float(adj_sl),
                                     "workingType": "MARK_PRICE",
